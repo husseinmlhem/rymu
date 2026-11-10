@@ -15,6 +15,14 @@ on:
         description: Existing internal draft release ID, only for Store smoke
         required: false
         type: string
+      package_input:
+        description: Store test input; public MSI reconstructs identical payload, not original archive
+        required: true
+        default: draft-msix
+        type: choice
+        options:
+          - draft-msix
+          - public-msi-payload
       draft_asset_id:
         description: Exact submitted MSIX draft asset ID, only for Store smoke
         required: false
@@ -139,14 +147,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & rymu-release/ci/store-msix-smoke.ps1 -Stage Validate
       - name: Prove read-only access to the exact unpublished draft asset
+        if: inputs.package_input != 'public-msi-payload'
         env:
           GH_TOKEN: ${{ github.token }}
           DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
           DRAFT_ASSET_ID: ${{ inputs.draft_asset_id }}
         run: '& rymu-release/ci/store-msix-smoke.ps1 -Stage Download -ReleaseId $env:DRAFT_RELEASE_ID -AssetId $env:DRAFT_ASSET_ID'
+      - name: Reconstruct all 100 exact payload files from the immutable public MSI
+        if: inputs.package_input == 'public-msi-payload'
+        run: '& rymu-release/ci/store-msix-smoke.ps1 -Stage Reconstruct -PackageInput public-msi-payload'
       - name: Register and remove a payload-identical test-signed copy on Server 2025
         shell: powershell
-        run: '& rymu-release/ci/store-msix-smoke.ps1 -Stage Install'
+        env:
+          PACKAGE_INPUT: ${{ inputs.package_input }}
+        run: '& rymu-release/ci/store-msix-smoke.ps1 -Stage Install -PackageInput $env:PACKAGE_INPUT'
       # No artifact upload, release publication, account sign-in, app launch or WACK claim.
       # The VM, test-signed copy and ephemeral certificate must never leave this job.
 

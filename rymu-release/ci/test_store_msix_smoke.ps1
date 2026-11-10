@@ -47,4 +47,8 @@ foreach ($forbidden in @('Cert:\LocalMachine\Root', 'Cert:\CurrentUser\Root', 'E
     if ($scriptText.Contains($forbidden)) { throw 'Forbidden installation/trust/permission shortcut.' }
 }
 $script:Cases++
+Expect-Rejected { Assert-PreparedPackage 'unused' @{status='unverified'} 'draft-msix' }
+Expect-Rejected { Assert-PreparedPackage 'unused' @{status='unverified'} 'public-msi-payload' }
+Expect-Rejected { Assert-PreparedPackage 'unused' @{status='payload-identical-reconstruction-verified';exactSubmittedArchiveTested=$true;publicMsiSha256='bd7a1ce138be3adf6f54fce8d9ba989f56eac8cfa5efe5f7b4e03deb15b41174'} 'public-msi-payload' }
+Expect-Rejected { Assert-PreparedPackage 'unused' @{} 'unsupported-input' }
 [ordered]@{ status='passed'; tests=$script:Cases; scope='pure input/host/token-redirect guards and PowerShell syntax; no hosted download or installation executed' } | ConvertTo-Json

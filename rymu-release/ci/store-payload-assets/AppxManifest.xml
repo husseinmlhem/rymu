@@ -1,0 +1,30 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10" IgnorableNamespaces="uap uap10 desktop rescap">
+  <Identity Name="HusseinMlhem.Rymu" Publisher="CN=F9C1B031-E95E-4F61-9D33-FEFE22907F92" Version="1.0.14.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Rymu</DisplayName>
+    <PublisherDisplayName>Hussein Mlhem</PublisherDisplayName>
+    <Description>Secure remote access to your own Windows computer.</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-US" />
+    <Resource Language="ar-SA" />
+  </Resources>
+  <Applications>
+    <Application Id="Rymu" Executable="Rymu.exe" uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
+      <uap:VisualElements DisplayName="Rymu" Description="Remote access to your own computer" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask" Executable="Rymu.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="RymuStartup" Enabled="false" DisplayName="Rymu" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

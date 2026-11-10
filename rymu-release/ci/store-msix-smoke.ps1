@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Validate', 'Download', 'Install')][string]$Stage = 'Validate',
+    [ValidateSet('Validate', 'Download', 'Reconstruct', 'Install')][string]$Stage = 'Validate',
+    [ValidateSet('draft-msix', 'public-msi-payload')][string]$PackageInput = 'draft-msix',
     [string]$ReleaseId = '',
     [string]$AssetId = ''
 )
@@ -61,6 +62,8 @@ function Assert-Payload([string]$Directory, $Expected, [switch]$AllowSignatureFo
     foreach ($file in Get-ChildItem -LiteralPath $Directory -File -Recurse -Force) {
         if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unexpected payload link.' }
         $name = $file.FullName.Substring($root.Length).Replace('\', '/')
+        # MakeAppx unpack emits its generated block map outside the 100 payload files.
+        if ($name -ceq 'AppxBlockMap.xml') { continue }
         if ($AllowSignatureFootprint -and $name -ceq 'AppxSignature.p7x') { continue }
         $wanted = $Expected.payloadSha256.PSObject.Properties[$name]
         if (!$wanted -or (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $wanted.Value) {
@@ -77,6 +80,21 @@ function Assert-PinnedPackage([string]$Path) {
         throw 'Input is not the exact submitted unsigned MSIX.'
     }
 }
+function Assert-PreparedPackage([string]$Path, $Proof, [string]$InputKind) {
+    if ($InputKind -eq 'draft-msix') {
+        if ($Proof.status -ne 'read-only-draft-download-verified') { throw 'Expected verified original draft transfer.' }
+        Assert-PinnedPackage $Path
+    } elseif ($InputKind -eq 'public-msi-payload') {
+        if ($Proof.status -ne 'payload-identical-reconstruction-verified' -or $Proof.exactSubmittedArchiveTested -ne $false -or
+            $Proof.publicMsiSha256 -cne 'bd7a1ce138be3adf6f54fce8d9ba989f56eac8cfa5efe5f7b4e03deb15b41174') { throw 'Expected public MSI reconstruction proof.' }
+    } else { throw 'Unsupported package input.' }
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($Proof.sha256 -cnotmatch '^[a-f0-9]{64}$' -or [long]$Proof.bytes -le 0 -or
+        $item.Attributes -band [IO.FileAttributes]::ReparsePoint -or $item.Length -ne [long]$Proof.bytes -or
+        (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Proof.sha256) {
+        throw 'Prepared package envelope changed or has invalid evidence.'
+    }
+}
 function Invoke-BoundedTool([string]$Tool, [string[]]$Arguments, [string]$LogPrefix, [int]$Seconds = 120) {
     foreach ($arg in $Arguments) { if ($arg.Contains('"') -or $arg.EndsWith('\')) { throw 'Unexpected native argument shape.' } }
     $quoted = @($Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
@@ -84,7 +102,14 @@ function Invoke-BoundedTool([string]$Tool, [string[]]$Arguments, [string]$LogPre
     $null = $process.Handle
     if (!$process.WaitForExit($Seconds * 1000)) { $process.Kill(); throw 'A bounded SDK command timed out.' }
     $process.Refresh()
-    if ($process.ExitCode -ne 0) { throw ('SDK command failed; exit ' + $process.ExitCode + '. Local job log: ' + [IO.Path]::GetFileName($LogPrefix)) }
+    if ($process.ExitCode -ne 0) {
+        # Only SDK/public-input tools use this helper; never HTTP tokens or signed URLs.
+        foreach ($path in @(($LogPrefix + '.out'), ($LogPrefix + '.err'))) {
+            $tail = (Get-Content -LiteralPath $path -Tail 12 -ErrorAction SilentlyContinue) -join "`n"
+            if ($tail) { Write-Output $tail.Substring(0, [Math]::Min(3000, $tail.Length)) }
+        }
+        throw ('Bounded preparation/SDK command failed; exit ' + $process.ExitCode + '. Local job log: ' + [IO.Path]::GetFileName($LogPrefix))
+    }
 }
 function Invoke-PrivateAssetDownload([string]$Url, [string]$Destination, [string]$Token) {
     Add-Type -AssemblyName System.Net.Http
@@ -141,10 +166,11 @@ if ([int]$os.BuildNumber -lt 26100 -or [int]$os.ProductType -notin @(2, 3) -or $
 $temporaryRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
 if ((Get-Item -LiteralPath $temporaryRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Runner temporary directory must not be a link.' }
 $scratch = Join-Path $temporaryRoot ('rymu-store-msix-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
-$original = Join-Path $scratch 'submitted-original.msix'
-$proofPath = Join-Path $scratch 'read-only-download.json'
+$original = Join-Path $scratch $(if ($PackageInput -eq 'public-msi-payload') { 'payload-identical-reconstructed.msix' } else { 'submitted-original.msix' })
+$proofPath = Join-Path $scratch 'prepared-package.json'
 
 if ($Stage -eq 'Download') {
+    if ($PackageInput -ne 'draft-msix') { throw 'Draft Download cannot use reconstruction mode.' }
     Assert-NumericId $ReleaseId; Assert-NumericId $AssetId
     if (!$env:GH_TOKEN) { throw 'The step requires the read-only job token.' }
     if (Test-Path -LiteralPath $scratch) { throw 'Preserve existing job scratch state; rerun as a fresh attempt.' }
@@ -158,18 +184,42 @@ if ($Stage -eq 'Download') {
     New-Item -ItemType Directory -Path $scratch | Out-Null
     Invoke-PrivateAssetDownload ('https://api.github.com/repos/' + $script:Repository + '/releases/assets/' + $AssetId) $original $env:GH_TOKEN
     Assert-PinnedPackage $original
-    $proof = [ordered]@{ status = 'read-only-draft-download-verified'; runId = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT; releaseId = $ReleaseId; assetId = $AssetId; draft = $true; sha256 = $script:ExpectedHash; bytes = $script:ExpectedBytes; installed = $false }
+    $proof = [ordered]@{ status = 'read-only-draft-download-verified'; runId = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT; releaseId = $ReleaseId; assetId = $AssetId; draft = $true; sha256 = $script:ExpectedHash; bytes = $script:ExpectedBytes; exactSubmittedArchiveTested = $true; installed = $false }
     $proof | ConvertTo-Json | Set-Content -LiteralPath $proofPath -Encoding UTF8
+    $proof | ConvertTo-Json
+    return
+}
+
+if ($Stage -eq 'Reconstruct') {
+    if ($PackageInput -ne 'public-msi-payload' -or $env:GH_TOKEN) { throw 'Reconstruction requires anonymous public input, without a token.' }
+    if (Test-Path -LiteralPath $scratch) { throw 'Preserve prior job scratch; use a fresh run.' }
+    $repo = Invoke-RestMethod -Method Get -Uri ('https://api.github.com/repos/' + $script:Repository) -Headers @{ Accept = 'application/vnd.github+json' } -TimeoutSec 30
+    if ($repo.private -ne $false) { throw 'Only the existing public repository and free standard runner are allowed.' }
+    $makeappx = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\10.0.26100.0\x64\MakeAppx.exe'
+    if (!(Test-Path -LiteralPath $makeappx)) { throw 'Expected Windows SDK package tool is unavailable.' }
+    New-Item -ItemType Directory -Path $scratch | Out-Null
+    $reconstruction = Join-Path $scratch 'reconstruction'
+    Invoke-BoundedTool (Get-Command python -ErrorAction Stop).Source @((Join-Path $PSScriptRoot 'reconstruct_store_payload.py'), '--output', $reconstruction) (Join-Path $scratch 'reconstruct-public-payload') 300
+    $payload = Join-Path $reconstruction 'payload'
+    Assert-Payload $payload $expected
+    Invoke-BoundedTool $makeappx @('pack', '/d', $payload, '/p', $original, '/h', 'SHA256', '/no') (Join-Path $scratch 'pack-reconstructed')
+    $roundtrip = Join-Path $scratch 'reconstruction-roundtrip'
+    Invoke-BoundedTool $makeappx @('unpack', '/p', $original, '/d', $roundtrip, '/no') (Join-Path $scratch 'unpack-reconstructed')
+    Assert-Payload $roundtrip $expected
+    Invoke-BoundedTool (Get-Command python -ErrorAction Stop).Source @((Join-Path $PSScriptRoot 'reconstruct_store_payload.py'), '--verify-blockmap', $roundtrip) (Join-Path $scratch 'verify-reconstructed-blockmap')
+    $proof = [ordered]@{ status = 'payload-identical-reconstruction-verified'; runId = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT; exactSubmittedArchiveTested = $false; submittedPackageSha256ForReference = $script:ExpectedHash; publicMsiSha256 = 'bd7a1ce138be3adf6f54fce8d9ba989f56eac8cfa5efe5f7b4e03deb15b41174'; publicMsiBytes = 36651008; payloadFiles = 100; sha256 = (Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = (Get-Item -LiteralPath $original).Length; installed = $false }
+    $proof | ConvertTo-Json | Set-Content -LiteralPath $proofPath -Encoding UTF8
+    Assert-PreparedPackage $original $proof $PackageInput
     $proof | ConvertTo-Json
     return
 }
 
 # Install runs in Windows PowerShell 5.1 for the native Appx module; no token is supplied.
 if ($PSVersionTable.PSEdition -eq 'Core') { throw 'Use Windows PowerShell 5.1 for the Appx installation stage.' }
-if (!(Test-Path -LiteralPath $proofPath -PathType Leaf)) { throw 'A successful read-only draft download must precede installation.' }
+if (!(Test-Path -LiteralPath $proofPath -PathType Leaf)) { throw 'Successful validated input preparation must precede installation.' }
 $proof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
-if ($proof.status -ne 'read-only-draft-download-verified' -or $proof.runId -ne $env:GITHUB_RUN_ID -or $proof.attempt -ne $env:GITHUB_RUN_ATTEMPT) { throw 'Download proof belongs to another job.' }
-Assert-PinnedPackage $original
+if ($proof.runId -ne $env:GITHUB_RUN_ID -or $proof.attempt -ne $env:GITHUB_RUN_ATTEMPT) { throw 'Input proof belongs to another job.' }
+Assert-PreparedPackage $original $proof $PackageInput
 Import-Module Appx -ErrorAction Stop
 if (Get-AppxPackage -Name $script:PackageName) { throw 'An existing package is present; do not replace it.' }
 if (Get-Process -Name Rymu -ErrorAction SilentlyContinue) { throw 'Do not run alongside an existing Rymu process.' }
@@ -179,10 +229,11 @@ if (!(Test-Path -LiteralPath $makeappx) -or !(Test-Path -LiteralPath $signtool))
 $unpacked = Join-Path $scratch 'original-payload'
 Invoke-BoundedTool $makeappx @('unpack', '/p', $original, '/d', $unpacked, '/no') (Join-Path $scratch 'unpack-original')
 Assert-Payload $unpacked $expected
+Invoke-BoundedTool (Get-Command python -ErrorAction Stop).Source @((Join-Path $PSScriptRoot 'reconstruct_store_payload.py'), '--verify-blockmap', $unpacked) (Join-Path $scratch 'verify-prepared-blockmap')
 $signed = Join-Path $scratch 'ephemeral-test-signed.msix'
 Copy-Item -LiteralPath $original -Destination $signed
 $certificate = $null; $failure = $null; $createdTrust = $false
-$report = [ordered]@{ scope = 'disposable Windows Server 2025 package registration/uninstall only'; submittedVersion = '1.0.14.0'; inputSha256 = $script:ExpectedHash; inputBytes = $script:ExpectedBytes; payloadFilesVerified = 100; actualOS = $os.Caption; build = $os.BuildNumber; runtimeActivated = $false; peerTested = $false; windows11Qualified = $false; wackRun = $false; appCertPresent = (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\App Certification Kit\appcert.exe')); wackReason = 'Server test scope; no WACK execution or client qualification inferred'; trustedPeopleScope = 'disposable VM LocalMachine only'; registered = $false; uninstalled = $false; certificateRemoved = $false; testSignedCopyUploaded = $false; status = 'failed' }
+$report = [ordered]@{ scope = 'disposable Windows Server 2025 package registration/uninstall only'; submittedVersion = '1.0.14.0'; packageInput = $PackageInput; exactSubmittedArchiveTested = [bool]$proof.exactSubmittedArchiveTested; submittedPackageSha256ForReference = $script:ExpectedHash; inputSha256 = $proof.sha256; inputBytes = $proof.bytes; payloadFilesVerified = 100; actualOS = $os.Caption; build = $os.BuildNumber; runtimeActivated = $false; peerTested = $false; windows11Qualified = $false; wackRun = $false; appCertPresent = (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\App Certification Kit\appcert.exe')); wackReason = 'Server test scope; no WACK execution or client qualification inferred'; trustedPeopleScope = 'disposable VM LocalMachine only'; registered = $false; uninstalled = $false; certificateRemoved = $false; testSignedCopyUploaded = $false; status = 'failed' }
 try {
     $certificate = New-SelfSignedCertificate -Type Custom -Subject $script:Publisher -KeyUsage DigitalSignature -CertStoreLocation 'Cert:\CurrentUser\My' -KeyExportPolicy NonExportable -HashAlgorithm SHA256 -KeyAlgorithm RSA -KeyLength 2048 -NotAfter (Get-Date).AddHours(4) -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}CA=false')
     if ($certificate.Subject -cne $script:Publisher -or $certificate.Thumbprint -notmatch '^[A-Fa-f0-9]{40}$') { throw 'Unexpected ephemeral signing identity.' }
@@ -197,7 +248,8 @@ try {
     $signedPayload = Join-Path $scratch 'test-signed-payload'
     Invoke-BoundedTool $makeappx @('unpack', '/p', $signed, '/d', $signedPayload, '/no') (Join-Path $scratch 'unpack-test-copy')
     Assert-Payload $signedPayload $expected -AllowSignatureFootprint
-    Assert-PinnedPackage $original
+    Invoke-BoundedTool (Get-Command python -ErrorAction Stop).Source @((Join-Path $PSScriptRoot 'reconstruct_store_payload.py'), '--verify-blockmap', $signedPayload) (Join-Path $scratch 'verify-signed-blockmap')
+    Assert-PreparedPackage $original $proof $PackageInput
     $report.signedCopyPayloadIdentical = $true
     Add-AppxPackage -Path $signed -ErrorAction Stop
     $registered = @(Get-AppxPackage -Name $script:PackageName)
@@ -222,8 +274,8 @@ finally {
             $report.certificateRemoved = !(Test-Path -LiteralPath ('Cert:\LocalMachine\TrustedPeople\' + $certificate.Thumbprint)) -and !(Test-Path -LiteralPath ('Cert:\CurrentUser\My\' + $certificate.Thumbprint))
         }
     } catch { $failure = 'Ephemeral certificate cleanup failed; disposable VM must be discarded.' }
-    Assert-PinnedPackage $original
-    $report.originalArchiveUnchanged = $true
+    Assert-PreparedPackage $original $proof $PackageInput
+    $report.preparedArchiveUnchanged = $true
     if (!$failure -and $report.registered -and $report.uninstalled -and $report.certificateRemoved) { $report.status = 'passed' }
     if ($failure) { $report.failure = $failure }
     $report | ConvertTo-Json -Depth 4

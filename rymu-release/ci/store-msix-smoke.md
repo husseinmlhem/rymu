@@ -12,4 +12,16 @@ Input is the exact submitted unsigned MSIX 1.0.14.0, 35,727,366 bytes, SHA256 `e
 
 `Validate` and `test_store_msix_smoke.ps1` are safe local configuration/pure guard checks; Download/Install reject a local environment before mutation. Windows PowerShell 5.1 runs Install because it hosts the native Appx cmdlets. All CI changes are separately hashed in source-baseline ciInputs. Original archive hashes/source overlays and the one-workflow allowlist remain intact.
 
-The draft token's actual visibility is established only by a real dispatched Download step, not the publisher's local gh credentials. If it fails, report that limitation and stop. No result should be called passed until the actual Get-AppxPackage and removal checks succeed.
+The draft token's actual visibility is established only by a real dispatched Download step, not the publisher's local gh credentials. If it fails, report that limitation and stop that transfer route. No result should be called passed until the actual Get-AppxPackage and removal checks succeed.
+
+## Separately authorized public-payload reconstruction
+
+The real read-only draft metadata request was unavailable in run 42817080633. Permissions were not broadened and the draft was not published. A separately authorized `package_input=public-msi-payload` mode avoids private transfer entirely:
+
+- An anonymous request downloads only the existing immutable public 0.1.14 MSI, pinned to 36,651,008 bytes and SHA256 `bd7a1ce138be3adf6f54fce8d9ba989f56eac8cfa5efe5f7b4e03deb15b41174`. Redirects, different lengths/hashes and overlong transfers fail closed. No token, account or cookie is supplied.
+- Read-only Windows Installer database APIs and `expand.exe` extract the embedded cabinet; no installer/custom action is invoked. The unchanged reviewed `test-windows-msi.py` additionally checks its tables and all 92 runtime files without `--round-trip`.
+- Eight Store-only inputs in `store-payload-assets/` are exact bytes extracted from the submitted MSIX: its manifest and seven PNGs, 38,532 bytes total. Their hashes and every runtime hash must match the original 100-file expectation.
+- MakeAppx packs/unpacks that payload. The exact root `AppxBlockMap.xml` is SDK metadata outside those 100 files; its 100 references, SHA256 blocks and whole-file hashes are independently checked. All other unexpected extracted files are rejected except the exact signature footprint in the signed-copy check.
+- The existing disposable signing/registration/uninstall safeguards then apply. Evidence explicitly says **payload-identical reconstruction**, `exactSubmittedArchiveTested=false`; it records the reconstructed envelope hash separately from the original reference hash. This is not an exact-archive, native app activation, peer, Windows 11 or WACK test.
+
+Both paths preserve the original draft, source workflow and owner device. Reconstructed and signed packages, certificates and keys are never uploaded.
