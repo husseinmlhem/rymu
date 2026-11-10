@@ -1,0 +1,11 @@
+--- a/src/rymu/privacy_tests.rs
++++ b/src/rymu/privacy_tests.rs
+@@ -4,7 +4,7 @@
+ use scrap::{Capturer, Display, TraitCapturer};
+ use std::{process::{Command, Stdio}, time::Instant};
+ 
+-#[path = "../../../../scripts/qa/privacy-capture.rs"]
++#[path = "../../rymu-release/scripts/qa/privacy-capture.rs"]
+ #[allow(dead_code)]
+ mod probe;
+ 

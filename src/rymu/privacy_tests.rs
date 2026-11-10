@@ -4,7 +4,7 @@ use super::*;
 use scrap::{Capturer, Display, TraitCapturer};
 use std::{process::{Command, Stdio}, time::Instant};
 
-#[path = "../../../../scripts/qa/privacy-capture.rs"]
+#[path = "../../rymu-release/scripts/qa/privacy-capture.rs"]
 #[allow(dead_code)]
 mod probe;
 

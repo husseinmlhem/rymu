@@ -108,6 +108,30 @@ function Verify-VcpkgPortInputs {
         Write-Output "Verified local versioned port tree: $name@$($override.version) $tree"
     }
 }
+function Invoke-IsolatedFlutterTests([string[]]$Tests) {
+    $previous = @{
+        LOCALAPPDATA = $env:LOCALAPPDATA; APPDATA = $env:APPDATA
+        RYMU_WINDOWS_TEST_PROFILE = $env:RYMU_WINDOWS_TEST_PROFILE; PATH = $env:PATH
+    }
+    $testProfile = Join-Path $toolsRoot ('rymu-win-qa-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path (Join-Path $testProfile 'Roaming') | Out-Null
+    try {
+        $env:LOCALAPPDATA = $testProfile
+        $env:APPDATA = Join-Path $testProfile 'Roaming'
+        $env:RYMU_WINDOWS_TEST_PROFILE = $testProfile
+        # RymuNative opens librustdesk.dll by name; use this build's runner.
+        $env:PATH = $runner + [IO.Path]::PathSeparator + $previous.PATH
+        Invoke-Checked $flutter (@('test', '--no-pub') + $Tests)
+    } finally {
+        foreach ($name in $previous.Keys) {
+            if ($null -eq $previous[$name]) {
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            } else {
+                [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
+            }
+        }
+    }
+}
 $releaseFlags = @('--config', 'profile.release.opt-level=1', '--config', 'profile.release.lto=false', '--config', 'profile.release.codegen-units=8')
 $features = @('--locked', '--offline', '--features', 'hwcodec,vram,flutter', '--lib', '--release', '--jobs', '4') + $releaseFlags
 
@@ -188,7 +212,7 @@ try {
                 Invoke-Checked 'python' @('-c', 'import subprocess,sys; result = subprocess.run([sys.argv[1], "--service-control"], check=False, timeout=15); assert result.returncode == 5, result.returncode', (Join-Path $runner 'Rymu.exe'))
                 Push-Location (Join-Path $native 'flutter')
                 try {
-                    Invoke-Checked $flutter @('test', '--no-pub', 'test/rymu_windows_lifecycle_test.dart', 'test/rymu_account_callback_page_test.dart', 'test/rymu_file_locations_test.dart', 'test/rymu_receiving_folder_test.dart')
+                    Invoke-IsolatedFlutterTests @('test/rymu_windows_lifecycle_test.dart', 'test/rymu_account_callback_page_test.dart', 'test/rymu_file_locations_test.dart', 'test/rymu_receiving_folder_test.dart')
                 } finally { Pop-Location }
             }
             'Package' {

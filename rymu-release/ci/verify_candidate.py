@@ -32,6 +32,25 @@ def reviewed_expectations(manifest: dict) -> tuple[dict, dict]:
     return checks, normalized
 
 
+def verify_rust_literal_inputs(root: Path) -> tuple[int, list[str]]:
+    pattern = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]|include(?:_str|_bytes)?!\(\s*"([^"]+)"')
+    root = root.resolve()
+    checked, failures = 0, []
+    for folder in ('src', 'libs'):
+        for source in (root / folder).rglob('*.rs'):
+            # The separate portable-wrapper executable generates data.bin and
+            # app_metadata.toml in its own packaging recipe; it is not this lib.
+            if source.is_relative_to(root / 'libs/portable'):
+                continue
+            for hit in pattern.finditer(source.read_text(encoding='utf-8', errors='replace')):
+                literal = hit.group(1) or hit.group(2)
+                target = (source.parent / literal).resolve()
+                checked += 1
+                if not target.is_relative_to(root) or not target.is_file():
+                    failures.append(f'Rust literal dependency outside/missing: {source.relative_to(root).as_posix()} -> {literal}')
+    return checked, failures
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     manifest = json.loads((root / 'rymu-release/ci/source-baseline.json').read_text(encoding='utf-8'))
@@ -41,6 +60,8 @@ def main() -> None:
         print(json.dumps({'status': 'failed', 'reason': str(error)}, indent=2))
         raise SystemExit(1)
     failures = []
+    rust_literal_count, rust_path_failures = verify_rust_literal_inputs(root)
+    failures.extend(rust_path_failures)
     line_ending_matches = 0
     for name, expected in checks.items():
         path = root / name
@@ -91,6 +112,7 @@ def main() -> None:
               'gitTrackedAllowlistAndSubmoduleVerified': git_index_verified,
               'reviewedSourceChanges': sorted(manifest.get('reviewedSourceChanges', {})),
               'originalArchiveHashMappingPreserved': True,
+              'rustLiteralSourceInputsVerified': rust_literal_count,
               'sourceArchiveSha256': manifest['sourceArchiveSha256'], 'buildExecuted': False}
     print(json.dumps(result, indent=2))
 

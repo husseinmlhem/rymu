@@ -1,7 +1,9 @@
 """Test the integrity boundary between original archive and reviewed source deltas."""
 import copy
 import unittest
-from verify_candidate import reviewed_expectations
+import tempfile
+from pathlib import Path
+from verify_candidate import reviewed_expectations, verify_rust_literal_inputs
 
 
 class OverlayTests(unittest.TestCase):
@@ -51,6 +53,28 @@ class OverlayTests(unittest.TestCase):
         self.manifest['reviewedSourceChanges'][self.name].pop('afterSha256')
         with self.assertRaisesRegex(ValueError, 'hash is missing'):
             reviewed_expectations(self.manifest)
+
+    def test_literal_input_cannot_rely_on_surrounding_workspace(self):
+        with tempfile.TemporaryDirectory(prefix='rymu-path-fixture-') as temporary:
+            parent = Path(temporary).resolve()
+            self.assertEqual(parent.parent, Path(tempfile.gettempdir()).resolve())
+            root = parent / 'candidate'
+            (root / 'src').mkdir(parents=True)
+            (parent / 'outside.rs').write_text('// outside candidate')
+            (root / 'src/test.rs').write_text('#[path = "../../outside.rs"]\nmod probe;\n')
+            count, failures = verify_rust_literal_inputs(root)
+            self.assertEqual(count, 1)
+            self.assertEqual(len(failures), 1)
+
+    def test_literal_input_must_exist_inside_candidate(self):
+        with tempfile.TemporaryDirectory(prefix='rymu-path-fixture-') as temporary:
+            root = Path(temporary).resolve()
+            self.assertEqual(root.parent, Path(tempfile.gettempdir()).resolve())
+            (root / 'src').mkdir()
+            (root / 'src/test.rs').write_text('const DATA: &str = include_str!("fixture.json");')
+            self.assertEqual(len(verify_rust_literal_inputs(root)[1]), 1)
+            (root / 'src/fixture.json').write_text('{}')
+            self.assertEqual(verify_rust_literal_inputs(root), (1, []))
 
 
 if __name__ == '__main__':

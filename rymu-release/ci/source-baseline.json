@@ -1254,17 +1254,18 @@
     "rymu-release/scripts/windows-store/test_identity.py": "14cc8da65c7c2e197cea01190971a96423098215b82b44ce37e44a520877d223"
   },
   "ciInputs": {
-    "RYMU.md": "23ca34befefc5fc52f03d55b16495a7c28f3ccc60ee387c2ffa1b30b293f7eac",
+    "RYMU.md": "062c378f31a28c3d83e05925ac1d538193a0a492fce4cb051e4732e6862c5f36",
     "rymu-release/ci/collect_vcpkg_notices.py": "cfb87dd30946c33f48cdd9983a02f81b0f0525809f5a17d3aa396ef0505d9cf2",
     "rymu-release/ci/emit_evidence.py": "3a266830bf702b50e029eb394c4d2f0a6e4b0c8d780c44ea61c6e7481aca4e04",
+    "rymu-release/ci/patches/privacy-test-layout.patch": "68e1554fd8dbd28a90b33f38cd3436a6260f1dd993ae86ebf95006f9e392b07a",
     "rymu-release/ci/patches/runner-publisher-attribution.patch": "90dbc31042502be5eb9da6a90f7ae88af62c43b5f4cf2b42944e273b6fe02464",
     "rymu-release/.gitattributes": "e135f27898f79ee5cb6f3ff82afbe27e09dae0af8d82a3a8eedae645358457da",
     ".github/workflows/rymu-windows-ci.yml": "8dc0ed3f1d149576c14b39ad8a451694e6ecbdd2390271493e1c9cccbf857793",
     "rymu-release/ci/test_collect_vcpkg_notices.py": "fea4103ae8065d127c1d9fba02dd3311decc34f6fe13fa48b19528feb2a86b04",
-    "rymu-release/ci/test_verify_candidate.py": "2a43df7a9bcf49323119cea1c333979876a54d18cd4e7407d29ae5505710e737",
+    "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
-    "rymu-release/ci/verify_candidate.py": "2706217ba09fcc1126a2e2cf33dcc82ed47fa592e4ba9a33f01b43c7f09c7197",
-    "rymu-release/ci/windows-build.ps1": "eff28bdefb0586a1ec059cf9d8b246b187e1521a83fc73b28df6304930a76ecc"
+    "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
+    "rymu-release/ci/windows-build.ps1": "74d137358edf7fb6f654bea58e1def813116fbddba71c681feb84361542d01cd"
   },
   "lineEndingNormalizedSha256": {
     "rymu-release/SOURCE-RECORD.json": "1ecdc8b146bda7edc1bcc169b1ce113e4d0faf24a2c1de488891b664e1f1141a",
@@ -2435,20 +2436,21 @@
     "rymu-release/scripts/windows-store/build_msix.py": "5fc1cf1ff2b670ace07b6a947d20346033b8294283b526b9506202773c261708",
     "rymu-release/scripts/windows-store/identity.template.json": "124c8b0d2d9b13197e976ec7eb710457da96e4c79df336cedac13f215c46fd22",
     "rymu-release/scripts/windows-store/test_identity.py": "14cc8da65c7c2e197cea01190971a96423098215b82b44ce37e44a520877d223",
-    "RYMU.md": "23ca34befefc5fc52f03d55b16495a7c28f3ccc60ee387c2ffa1b30b293f7eac",
+    "RYMU.md": "062c378f31a28c3d83e05925ac1d538193a0a492fce4cb051e4732e6862c5f36",
     "rymu-release/ci/collect_vcpkg_notices.py": "cfb87dd30946c33f48cdd9983a02f81b0f0525809f5a17d3aa396ef0505d9cf2",
     "rymu-release/ci/emit_evidence.py": "3a266830bf702b50e029eb394c4d2f0a6e4b0c8d780c44ea61c6e7481aca4e04",
+    "rymu-release/ci/patches/privacy-test-layout.patch": "68e1554fd8dbd28a90b33f38cd3436a6260f1dd993ae86ebf95006f9e392b07a",
     "rymu-release/ci/patches/runner-publisher-attribution.patch": "90dbc31042502be5eb9da6a90f7ae88af62c43b5f4cf2b42944e273b6fe02464",
     "rymu-release/.gitattributes": "e135f27898f79ee5cb6f3ff82afbe27e09dae0af8d82a3a8eedae645358457da",
     ".github/workflows/rymu-windows-ci.yml": "8dc0ed3f1d149576c14b39ad8a451694e6ecbdd2390271493e1c9cccbf857793",
     "rymu-release/ci/test_collect_vcpkg_notices.py": "fea4103ae8065d127c1d9fba02dd3311decc34f6fe13fa48b19528feb2a86b04",
-    "rymu-release/ci/test_verify_candidate.py": "2a43df7a9bcf49323119cea1c333979876a54d18cd4e7407d29ae5505710e737",
+    "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
-    "rymu-release/ci/verify_candidate.py": "2706217ba09fcc1126a2e2cf33dcc82ed47fa592e4ba9a33f01b43c7f09c7197",
-    "rymu-release/ci/windows-build.ps1": "eff28bdefb0586a1ec059cf9d8b246b187e1521a83fc73b28df6304930a76ecc"
+    "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
+    "rymu-release/ci/windows-build.ps1": "74d137358edf7fb6f654bea58e1def813116fbddba71c681feb84361542d01cd"
   },
   "notes": [
-    "Original source archive hashes are preserved; explicit reviewedSourceChanges records the attribution overlay.",
+    "Original source archive hashes are preserved; explicit reviewedSourceChanges records all source overlays.",
     "Upstream active workflows are preserved outside .github/workflows.",
     "Git checkout may normalize recorded NUL-free CRLF text (including legacy encodings) to LF; only that exact conversion is accepted.",
     "New CI is not a public repository or a completed build."
@@ -2463,6 +2465,16 @@
       "patchSha256": "90dbc31042502be5eb9da6a90f7ae88af62c43b5f4cf2b42944e273b6fe02464",
       "baseCommit": "329b09a89e451fb6f95bc39f0b473fa087cdf0b1",
       "reason": "Reviewed Rymu maintainer company and modification attribution; full upstream notice preserved."
+    },
+    "src/rymu/privacy_tests.rs": {
+      "beforeSha256": "fcf567b2bf52aca0b1bc59191ee5f72aa008b8ed69e0045c6caa975a02f36dcf",
+      "beforeLineEndingNormalizedSha256": "2550e6f457592bc329f31dc705c9a138c0a6f14d965eed0ca5939f983a0eaae9",
+      "afterSha256": "f6b1598c37aaa20e07c8fc4e739ce3b731393dc0c2e252c3222a4df99792e422",
+      "afterLineEndingNormalizedSha256": "f6b1598c37aaa20e07c8fc4e739ce3b731393dc0c2e252c3222a4df99792e422",
+      "patch": "rymu-release/ci/patches/privacy-test-layout.patch",
+      "patchSha256": "68e1554fd8dbd28a90b33f38cd3436a6260f1dd993ae86ebf95006f9e392b07a",
+      "baseCommit": "ad40dce6fe362e40f6972f107afff59d12556585",
+      "reason": "Existing Windows privacy test probe relocated to the hash-identical QA helper in the native-root layout; no tests removed or skipped."
     }
   }
 }

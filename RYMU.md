@@ -6,6 +6,8 @@ The imported application source is the already-published Windows 0.1.14 / Androi
 
 The provenance candidate also records a reviewed `Runner.rc` metadata overlay: the company becomes Hussein Mlhem and the Rymu modification credit is appended while the complete upstream copyright notice remains. Original archive hashes are retained separately from the overlay's before/after and patch hashes. This candidate is changed source, not a claim that its future binaries correspond byte-for-byte to the older source archive. A distributed update requires its corresponding updated source.
 
+A second, test-only overlay relocates the existing privacy test probe import to the same hash-verified QA helper under `rymu-release/scripts/qa/`. It preserves the tests and their existing execution conditions while making the native-root checkout self-contained. Literal Rust source dependencies are checked before tool bootstrap so they cannot accidentally resolve from a surrounding workspace.
+
 - [Official application website](https://rymu.iptvora-server.workers.dev/)
 - [Released Windows installer](https://rymu.iptvora-server.workers.dev/api/v1/releases/latest/windows-installer)
 - [Released corresponding source](https://rymu.iptvora-server.workers.dev/api/v1/releases/latest/source)
@@ -17,7 +19,7 @@ No workflow signs or publishes a release. SignPath Foundation acceptance has not
 
 ## Proposed code-signing policy
 
-Hussein Mlhem maintains this Rymu fork. The project is preparing an application to SignPath Foundation for free open-source code signing; the application has not been accepted and no certificate has been issued. Current website installers remain unsigned. This statement is not a sponsorship announcement.
+Hussein Mlhem maintains this Rymu fork. The SignPath Foundation eligibility application was submitted on 2026-11-10 and receipt was confirmed. Review of CI, licenses and component provenance is ongoing; no acceptance, certificate or sponsorship has been granted. Current website installers remain unsigned.
 
 If approved, signing will require a reviewed public source commit, a successful build through the approved CI process, verified output provenance and explicit human release approval by the maintainer. Signing will not run automatically for pull requests or arbitrary uploaded binaries. Maintainers and release approvers must use multifactor authentication. Third-party components and their existing attribution/signatures must be reviewed and preserved; Rymu does not claim to author upstream binaries. These controls must be configured and verified before the first signing request.
 
