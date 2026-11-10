@@ -1260,7 +1260,7 @@
     ".github/workflows/rymu-windows-ci.yml": "f6ca4a6a5728c24c9888b344b5bff673b223875e011b71ba0f46b019c3290cd4",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "b071b1931da77e968c2af7c7a98916cdebd1241fd1a23495d4f377bda0ae4321",
-    "rymu-release/ci/windows-build.ps1": "df07ec099a70975a25462d2751ae879a712ddb1781f9e3357e7fef311b145cc6"
+    "rymu-release/ci/windows-build.ps1": "e2780bef90bf932bd070377ff8fd456f40b6d251898b8ed6e280c2a66f05f9db"
   },
   "lineEndingNormalizedSha256": {
     ".cargo/config.toml": "a606016dff220811e0a1ed870158b41c6074ffbc4db459f05174ccc1c69ad610",
@@ -2437,7 +2437,7 @@
     ".github/workflows/rymu-windows-ci.yml": "f6ca4a6a5728c24c9888b344b5bff673b223875e011b71ba0f46b019c3290cd4",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "b071b1931da77e968c2af7c7a98916cdebd1241fd1a23495d4f377bda0ae4321",
-    "rymu-release/ci/windows-build.ps1": "df07ec099a70975a25462d2751ae879a712ddb1781f9e3357e7fef311b145cc6"
+    "rymu-release/ci/windows-build.ps1": "e2780bef90bf932bd070377ff8fd456f40b6d251898b8ed6e280c2a66f05f9db"
   },
   "notes": [
     "Original source bytes unchanged; only archive paths are mapped to a native-fork root.",

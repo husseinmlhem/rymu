@@ -93,8 +93,23 @@ function Remove-VerifiedToolArchive([string]$ArchivePath) {
     Remove-Item -LiteralPath $resolved -Force
     Write-Output "Removed extracted, hash-verified tool archive: $($item.Name)"
 }
-$profile = @('--config', 'profile.release.opt-level=1', '--config', 'profile.release.lto=false', '--config', 'profile.release.codegen-units=8')
-$features = @('--locked', '--offline', '--features', 'hwcodec,vram,flutter', '--lib', '--release', '--jobs', '4') + $profile
+function Verify-VcpkgPortInputs {
+    $promisor = & git -C $vcpkg config --local --get remote.origin.promisor
+    if ($LASTEXITCODE -notin 0, 1 -or $promisor -eq 'true') { throw 'Versioned ports require a complete local vcpkg Git object store.' }
+    foreach ($override in $vcpkgManifest.overrides) {
+        $name = $override.name
+        $versionsPath = Join-Path $vcpkg "versions/$($name.Substring(0, 1))-/$name.json"
+        $registry = Get-Content -LiteralPath $versionsPath -Raw | ConvertFrom-Json
+        $portVersions = @($registry.versions | Where-Object { $_.version -eq $override.version -and $_.'port-version' -eq 0 })
+        if ($portVersions.Count -ne 1 -or $portVersions[0].'git-tree' -notmatch '^[a-f0-9]{40}$') { throw "Ambiguous pinned port input: $name" }
+        $tree = $portVersions[0].'git-tree'
+        $proof = Join-Path $toolsRoot "verified-port-$name.tar"
+        Invoke-Checked 'git' @('-C', $vcpkg, 'archive', '--format=tar', "--output=$proof", $tree)
+        Write-Output "Verified local versioned port tree: $name@$($override.version) $tree"
+    }
+}
+$releaseFlags = @('--config', 'profile.release.opt-level=1', '--config', 'profile.release.lto=false', '--config', 'profile.release.codegen-units=8')
+$features = @('--locked', '--offline', '--features', 'hwcodec,vram,flutter', '--lib', '--release', '--jobs', '4') + $releaseFlags
 
 Start-Transcript -LiteralPath (Join-Path $out "logs/$Stage.log") | Out-Null
 try {
@@ -135,8 +150,10 @@ try {
                 Invoke-Checked 'git' @('init', $vcpkg)
                 Invoke-Checked 'git' @('-C', $vcpkg, 'remote', 'add', 'origin', 'https://github.com/microsoft/vcpkg.git')
                 # vcpkg version resolution needs registry history, not a shallow source snapshot.
-                Invoke-Checked 'git' @('-C', $vcpkg, 'fetch', '--filter=blob:none', 'origin', $lock.vcpkgCommit)
+                # Full objects avoid lazy promisor fetches inside vcpkg's child environment.
+                Invoke-Checked 'git' @('-C', $vcpkg, 'fetch', 'origin', $lock.vcpkgCommit)
                 Invoke-Checked 'git' @('-C', $vcpkg, 'checkout', '--detach', $lock.vcpkgCommit)
+                Verify-VcpkgPortInputs
                 Invoke-Checked (Join-Path $vcpkg 'bootstrap-vcpkg.bat') @('-disableMetrics')
                 Write-DiskState 'before-vcpkg' 4
                 Invoke-Checked (Join-Path $vcpkg 'vcpkg.exe') @('install', '--triplet', 'x64-windows-static', "--x-install-root=$env:VCPKG_INSTALLED_ROOT", '--clean-after-build')
