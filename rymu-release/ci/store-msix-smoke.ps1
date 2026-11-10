@@ -64,7 +64,7 @@ function Assert-Payload([string]$Directory, $Expected, [switch]$AllowSignatureFo
         $name = $file.FullName.Substring($root.Length).Replace('\', '/')
         # MakeAppx unpack emits its generated block map outside the 100 payload files.
         if ($name -ceq 'AppxBlockMap.xml') { continue }
-        if ($AllowSignatureFootprint -and $name -ceq 'AppxSignature.p7x') { continue }
+        if ($AllowSignatureFootprint -and $name -cin @('AppxSignature.p7x', 'AppxMetadata/CodeIntegrity.cat')) { continue }
         $wanted = $Expected.payloadSha256.PSObject.Properties[$name]
         $actual = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         if (!$wanted) { throw ('Public payload check: unexpected-entry; path=' + $name + '; actualSHA256=' + $actual + '; expected=absent-from-100-payload-files') }

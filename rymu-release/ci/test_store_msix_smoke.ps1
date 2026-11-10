@@ -51,4 +51,30 @@ Expect-Rejected { Assert-PreparedPackage 'unused' @{status='unverified'} 'draft-
 Expect-Rejected { Assert-PreparedPackage 'unused' @{status='unverified'} 'public-msi-payload' }
 Expect-Rejected { Assert-PreparedPackage 'unused' @{status='payload-identical-reconstruction-verified';exactSubmittedArchiveTested=$true;publicMsiSha256='bd7a1ce138be3adf6f54fce8d9ba989f56eac8cfa5efe5f7b4e03deb15b41174'} 'public-msi-payload' }
 Expect-Rejected { Assert-PreparedPackage 'unused' @{} 'unsupported-input' }
+$fixtureParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$fixtureName = 'rymu-store-guard-' + [Guid]::NewGuid().ToString('N')
+$fixture = Join-Path $fixtureParent $fixtureName
+try {
+    New-Item -ItemType Directory -Path $fixture | Out-Null
+    $hashes = [ordered]@{}
+    foreach ($index in 1..100) {
+        $relative = 'file-' + $index + '.txt'
+        $path = Join-Path $fixture $relative
+        [IO.File]::WriteAllText($path, ('public test payload ' + $index))
+        $hashes[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $fixtureExpected = [PSCustomObject]@{ payloadSha256 = [PSCustomObject]$hashes }
+    Assert-Payload $fixture $fixtureExpected; $script:Cases++
+    New-Item -ItemType Directory -Path (Join-Path $fixture 'AppxMetadata') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $fixture 'AppxMetadata/CodeIntegrity.cat'), 'synthetic metadata, not a real certificate')
+    Expect-Rejected { Assert-Payload $fixture $fixtureExpected }
+    Assert-Payload $fixture $fixtureExpected -AllowSignatureFootprint; $script:Cases++
+    [IO.File]::WriteAllText((Join-Path $fixture 'AppxMetadata/Unexpected.cat'), 'unrecognized extra')
+    Expect-Rejected { Assert-Payload $fixture $fixtureExpected -AllowSignatureFootprint }
+} finally {
+    $resolved = [IO.Path]::GetFullPath($fixture)
+    if (!$resolved.StartsWith($fixtureParent, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($resolved) -cne $fixtureName) { throw 'Refuse unsafe fixture cleanup.' }
+    if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
+}
 [ordered]@{ status='passed'; tests=$script:Cases; scope='pure input/host/token-redirect guards and PowerShell syntax; no hosted download or installation executed' } | ConvertTo-Json
