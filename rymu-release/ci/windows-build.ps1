@@ -45,6 +45,8 @@ $env:LIBCLANG_PATH = Join-Path $toolsRoot 'libclang/clang/native'
 $env:PUB_CACHE = Join-Path $toolsRoot 'pub-cache'
 $env:VCPKG_ROOT = $vcpkg
 $env:VCPKG_INSTALLED_ROOT = Join-Path $vcpkg 'installed'
+$env:VCPKG_DOWNLOADS = Join-Path $toolsRoot 'vcpkg-downloads'
+$env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path $toolsRoot 'vcpkg-cache'
 $env:VCPKG_DEFAULT_HOST_TRIPLET = 'x64-windows-static'
 $env:VCPKG_DISABLE_METRICS = '1'
 $env:VCPKG_BINARY_SOURCES = 'clear'
@@ -70,6 +72,27 @@ function Require-Passed([string]$Previous) {
     $value = Get-Content -LiteralPath $record -Raw | ConvertFrom-Json
     if ($value.version -ne $Version -or $value.runId -ne $env:GITHUB_RUN_ID) { throw 'A prerequisite belongs to another qualification build.' }
 }
+function Write-DiskState([string]$Label, [double]$MinimumGiB = 0) {
+    $drives = @([IO.Path]::GetPathRoot($native), [IO.Path]::GetPathRoot($toolsRoot)) | Select-Object -Unique
+    foreach ($drive in $drives) {
+        $free = (Get-PSDrive -Name $drive.TrimEnd('\').TrimEnd(':')).Free / 1GB
+        [ordered]@{ checkpoint = $Label; drive = $drive; freeGiB = [Math]::Round($free, 2); minimumGiB = $MinimumGiB } | ConvertTo-Json -Compress | Write-Output
+        if ($free -lt $MinimumGiB) { throw "Insufficient free disk at $Label; preserve logs and review the standard-runner recipe." }
+    }
+}
+function Remove-VerifiedToolArchive([string]$ArchivePath) {
+    $resolved = (Resolve-Path -LiteralPath $ArchivePath).Path
+    $expectedParent = [IO.Path]::GetFullPath($toolsRoot).TrimEnd('\')
+    $item = Get-Item -LiteralPath $resolved -Force
+    $allowedNames = @($lock.downloads.PSObject.Properties.Value | ForEach-Object filename)
+    if (![String]::Equals([IO.Path]::GetDirectoryName($resolved), $expectedParent, [StringComparison]::OrdinalIgnoreCase) -or
+        ((Get-Item -LiteralPath $expectedParent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Name -notin $allowedNames) {
+        throw 'Refusing cleanup outside a named archive in this job tool directory.'
+    }
+    Remove-Item -LiteralPath $resolved -Force
+    Write-Output "Removed extracted, hash-verified tool archive: $($item.Name)"
+}
 $profile = @('--config', 'profile.release.opt-level=1', '--config', 'profile.release.lto=false', '--config', 'profile.release.codegen-units=8')
 $features = @('--locked', '--offline', '--features', 'hwcodec,vram,flutter', '--lib', '--release', '--jobs', '4') + $profile
 
@@ -77,12 +100,15 @@ Start-Transcript -LiteralPath (Join-Path $out "logs/$Stage.log") | Out-Null
 try {
     Push-Location $native
     try {
+        Write-DiskState "$Stage-start"
         switch ($Stage) {
             'Bootstrap' {
+                Write-DiskState 'before-tool-bootstrap' 10
                 if (Test-Path -LiteralPath $toolsRoot) { throw 'Preserve prior tool state; rerun on a fresh GitHub job.' }
                 New-Item -ItemType Directory -Path $toolsRoot | Out-Null
                 $sdkZip = Download-Locked 'flutter'
                 Expand-Archive -LiteralPath $sdkZip -DestinationPath $toolsRoot
+                Remove-VerifiedToolArchive $sdkZip
                 $revision = (& git -C $flutterRoot rev-parse HEAD).Trim()
                 if ($LASTEXITCODE -ne 0 -or $revision -ne $lock.flutterCommit) { throw 'Unexpected Flutter source revision.' }
                 Invoke-Checked $flutter @('config', '--no-analytics')
@@ -93,12 +119,17 @@ try {
                 if (!(Test-Path -LiteralPath (Join-Path $engineRoot 'flutter_windows.dll'))) { throw 'Unexpected custom engine archive layout.' }
                 $sdkEngine = Join-Path $flutterRoot 'bin/cache/artifacts/engine/windows-x64-release'
                 Get-ChildItem -LiteralPath $engineRoot -Force | Copy-Item -Destination $sdkEngine -Recurse -Force
+                Remove-VerifiedToolArchive $engineZip
                 $patch = Join-Path $native '.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff'
                 Invoke-Checked 'git' @('-C', $flutterRoot, 'apply', '--check', $patch)
                 Invoke-Checked 'git' @('-C', $flutterRoot, 'apply', $patch)
-                Expand-Archive -LiteralPath (Download-Locked 'libclang') -DestinationPath (Join-Path $toolsRoot 'libclang')
+                $clangZip = Download-Locked 'libclang'
+                Expand-Archive -LiteralPath $clangZip -DestinationPath (Join-Path $toolsRoot 'libclang')
                 if (!(Test-Path -LiteralPath (Join-Path $env:LIBCLANG_PATH 'libclang.dll'))) { throw 'Expected libclang.dll is missing.' }
-                Expand-Archive -LiteralPath (Download-Locked 'wix') -DestinationPath $wix
+                Remove-VerifiedToolArchive $clangZip
+                $wixZip = Download-Locked 'wix'
+                Expand-Archive -LiteralPath $wixZip -DestinationPath $wix
+                Remove-VerifiedToolArchive $wixZip
                 Invoke-Checked 'rustup' @('toolchain', 'install', $lock.rust, '--profile', 'minimal')
                 Invoke-Checked 'rustc' @('--version')
                 Invoke-Checked 'git' @('init', $vcpkg)
@@ -107,17 +138,21 @@ try {
                 Invoke-Checked 'git' @('-C', $vcpkg, 'fetch', '--filter=blob:none', 'origin', $lock.vcpkgCommit)
                 Invoke-Checked 'git' @('-C', $vcpkg, 'checkout', '--detach', $lock.vcpkgCommit)
                 Invoke-Checked (Join-Path $vcpkg 'bootstrap-vcpkg.bat') @('-disableMetrics')
-                Invoke-Checked (Join-Path $vcpkg 'vcpkg.exe') @('install', '--triplet', 'x64-windows-static', "--x-install-root=$env:VCPKG_INSTALLED_ROOT")
+                Write-DiskState 'before-vcpkg' 4
+                Invoke-Checked (Join-Path $vcpkg 'vcpkg.exe') @('install', '--triplet', 'x64-windows-static', "--x-install-root=$env:VCPKG_INSTALLED_ROOT", '--clean-after-build')
+                Write-DiskState 'after-vcpkg'
                 Invoke-Checked 'cargo' @('fetch', '--locked')
                 Push-Location (Join-Path $native 'flutter')
                 try { Invoke-Checked $flutter @('pub', 'get', '--enforce-lockfile') } finally { Pop-Location }
             }
             'Build' {
                 Require-Passed 'Bootstrap'
+                Write-DiskState 'before-rust' 4
                 Invoke-Checked 'cargo' (@('rustc') + $features + @('--crate-type', 'cdylib'))
                 if (!(Test-Path -LiteralPath (Join-Path $native 'target/release/librustdesk.dll'))) { throw 'Rust did not emit its native library.' }
                 Push-Location (Join-Path $native 'flutter')
                 try {
+                    Write-DiskState 'before-flutter' 2
                     Invoke-Checked $flutter @('build', 'windows', '--release', '--no-pub', "--build-name=$Version", '--build-number=0', '--dart-define=RYMU_ACCOUNT_API_BASE=https://rymu.iptvora-server.workers.dev/api/v1')
                 } finally { Pop-Location }
                 if (!(Test-Path -LiteralPath (Join-Path $runner 'Rymu.exe'))) { throw 'Flutter did not emit the Windows runner.' }
@@ -125,6 +160,7 @@ try {
             }
             'Test' {
                 Require-Passed 'Build'
+                Write-DiskState 'before-tests' 1.5
                 Invoke-Checked 'cargo' (@('test') + $features + @('rymu::', '--', '--nocapture'))
                 Invoke-Checked 'python' @((Join-Path $release 'scripts/test-windows-bridge.py'), (Join-Path $runner 'librustdesk.dll'))
                 Invoke-Checked 'python' @('-c', 'import subprocess,sys; result = subprocess.run([sys.argv[1], "--service-control"], check=False, timeout=15); assert result.returncode == 5, result.returncode', (Join-Path $runner 'Rymu.exe'))
@@ -162,6 +198,7 @@ try {
                 $dependencyInventory | Set-Content -LiteralPath (Join-Path $out 'cargo-dependency-inventory.json') -Encoding utf8
             }
         }
+        Write-DiskState "$Stage-complete"
         [ordered]@{ stage = $Stage; status = 'passed'; version = $Version; runId = $env:GITHUB_RUN_ID; completedAt = [DateTime]::UtcNow.ToString('o') } |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out "$Stage.passed.json") -Encoding utf8
     } finally { Pop-Location }
