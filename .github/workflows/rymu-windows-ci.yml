@@ -38,7 +38,9 @@ jobs:
         shell: pwsh
     steps:
       - name: Preserve exact source line endings on the disposable runner
-        run: git config --global core.autocrlf false
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Check out the reviewed source and pinned submodule
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
