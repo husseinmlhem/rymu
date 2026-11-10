@@ -13,6 +13,14 @@ The manual [Windows CI workflow](.github/workflows/rymu-windows-ci.yml) is a new
 
 No workflow signs or publishes a release. SignPath Foundation acceptance has not been granted, and no code-signing sponsorship or certificate is claimed. Publisher metadata, component provenance, upstream signing lineage and final runtime qualification remain review items before a signed release.
 
+## Proposed code-signing policy
+
+Hussein Mlhem maintains this Rymu fork. The project is preparing an application to SignPath Foundation for free open-source code signing; the application has not been accepted and no certificate has been issued. Current website installers remain unsigned. This statement is not a sponsorship announcement.
+
+If approved, signing will require a reviewed public source commit, a successful build through the approved CI process, verified output provenance and explicit human release approval by the maintainer. Signing will not run automatically for pull requests or arbitrary uploaded binaries. Maintainers and release approvers must use multifactor authentication. Third-party components and their existing attribution/signatures must be reviewed and preserved; Rymu does not claim to author upstream binaries. These controls must be configured and verified before the first signing request.
+
+See the [application privacy policy](https://rymu.iptvora-server.workers.dev/privacy). Any future signing provider's separate terms and privacy policy require the account owner's review before enrollment.
+
 Only the Rymu workflow is active in the qualification branch. Original upstream workflows are preserved under `rymu-release/upstream-workflows/` for reference. Generated bridge files from the public archive are retained without unpinned code generation. The baseline verifier checks exact imported source bytes and reviewed CI files.
 
 Use a public repository with the standard `windows-2022` runner. Uploading artifacts is off by default and must be enabled only after checking the account's included artifact-storage allowance; enabled artifacts expire after one day. No paid runner, cache service or signing subscription is configured.

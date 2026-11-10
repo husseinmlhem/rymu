@@ -1254,13 +1254,13 @@
     "rymu-release/scripts/windows-store/test_identity.py": "14cc8da65c7c2e197cea01190971a96423098215b82b44ce37e44a520877d223"
   },
   "ciInputs": {
-    "RYMU.md": "606e4643b517ccf1e29bab3641c890d7de9b9257ff80788124310e40313ffb56",
+    "RYMU.md": "5f015da350da716486a178f0bfc6de2105ab5e40a890b6c02c8adb0fadcb24d2",
     "rymu-release/ci/emit_evidence.py": "f2f27d91082c0b5ec50a36a8778c863b4e42e14493403dcecd5b4c380704c471",
     "rymu-release/.gitattributes": "e135f27898f79ee5cb6f3ff82afbe27e09dae0af8d82a3a8eedae645358457da",
     ".github/workflows/rymu-windows-ci.yml": "f6ca4a6a5728c24c9888b344b5bff673b223875e011b71ba0f46b019c3290cd4",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "b071b1931da77e968c2af7c7a98916cdebd1241fd1a23495d4f377bda0ae4321",
-    "rymu-release/ci/windows-build.ps1": "e2780bef90bf932bd070377ff8fd456f40b6d251898b8ed6e280c2a66f05f9db"
+    "rymu-release/ci/windows-build.ps1": "34af9bdf8c6ec6b6a76c8059665d9fee2608ca73664273dcd1a7176a85a6027d"
   },
   "lineEndingNormalizedSha256": {
     ".cargo/config.toml": "a606016dff220811e0a1ed870158b41c6074ffbc4db459f05174ccc1c69ad610",
@@ -2431,13 +2431,13 @@
     "rymu-release/scripts/windows-store/build_msix.py": "5fc1cf1ff2b670ace07b6a947d20346033b8294283b526b9506202773c261708",
     "rymu-release/scripts/windows-store/identity.template.json": "124c8b0d2d9b13197e976ec7eb710457da96e4c79df336cedac13f215c46fd22",
     "rymu-release/scripts/windows-store/test_identity.py": "14cc8da65c7c2e197cea01190971a96423098215b82b44ce37e44a520877d223",
-    "RYMU.md": "606e4643b517ccf1e29bab3641c890d7de9b9257ff80788124310e40313ffb56",
+    "RYMU.md": "5f015da350da716486a178f0bfc6de2105ab5e40a890b6c02c8adb0fadcb24d2",
     "rymu-release/ci/emit_evidence.py": "f2f27d91082c0b5ec50a36a8778c863b4e42e14493403dcecd5b4c380704c471",
     "rymu-release/.gitattributes": "e135f27898f79ee5cb6f3ff82afbe27e09dae0af8d82a3a8eedae645358457da",
     ".github/workflows/rymu-windows-ci.yml": "f6ca4a6a5728c24c9888b344b5bff673b223875e011b71ba0f46b019c3290cd4",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "b071b1931da77e968c2af7c7a98916cdebd1241fd1a23495d4f377bda0ae4321",
-    "rymu-release/ci/windows-build.ps1": "e2780bef90bf932bd070377ff8fd456f40b6d251898b8ed6e280c2a66f05f9db"
+    "rymu-release/ci/windows-build.ps1": "34af9bdf8c6ec6b6a76c8059665d9fee2608ca73664273dcd1a7176a85a6027d"
   },
   "notes": [
     "Original source bytes unchanged; only archive paths are mapped to a native-fork root.",

@@ -121,6 +121,11 @@ try {
                 Write-DiskState 'before-tool-bootstrap' 10
                 if (Test-Path -LiteralPath $toolsRoot) { throw 'Preserve prior tool state; rerun on a fresh GitHub job.' }
                 New-Item -ItemType Directory -Path $toolsRoot | Out-Null
+                # vcpkg validates its default cache before applying VCPKG_BINARY_SOURCES=clear.
+                # Create every private tool home/cache before any consumer starts.
+                foreach ($cacheDirectory in @($env:CARGO_HOME, $env:RUSTUP_HOME, $env:PUB_CACHE, $env:VCPKG_DOWNLOADS, $env:VCPKG_DEFAULT_BINARY_CACHE)) {
+                    New-Item -ItemType Directory -Path $cacheDirectory | Out-Null
+                }
                 $sdkZip = Download-Locked 'flutter'
                 Expand-Archive -LiteralPath $sdkZip -DestinationPath $toolsRoot
                 Remove-VerifiedToolArchive $sdkZip
