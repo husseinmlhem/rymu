@@ -66,9 +66,9 @@ function Assert-Payload([string]$Directory, $Expected, [switch]$AllowSignatureFo
         if ($name -ceq 'AppxBlockMap.xml') { continue }
         if ($AllowSignatureFootprint -and $name -ceq 'AppxSignature.p7x') { continue }
         $wanted = $Expected.payloadSha256.PSObject.Properties[$name]
-        if (!$wanted -or (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $wanted.Value) {
-            throw 'Extracted payload differs from the exact submitted package.'
-        }
+        $actual = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if (!$wanted) { throw ('Public payload check: unexpected-entry; path=' + $name + '; actualSHA256=' + $actual + '; expected=absent-from-100-payload-files') }
+        if ($actual -cne $wanted.Value) { throw ('Public payload check: hash-mismatch; path=' + $name + '; expectedSHA256=' + $wanted.Value + '; actualSHA256=' + $actual) }
         $seen += $name
     }
     if ($seen.Count -ne 100) { throw 'Expected exactly 100 unpacked payload files.' }
