@@ -1265,7 +1265,7 @@
     "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
-    "rymu-release/ci/windows-build.ps1": "74d137358edf7fb6f654bea58e1def813116fbddba71c681feb84361542d01cd"
+    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92"
   },
   "lineEndingNormalizedSha256": {
     "rymu-release/SOURCE-RECORD.json": "1ecdc8b146bda7edc1bcc169b1ce113e4d0faf24a2c1de488891b664e1f1141a",
@@ -2447,7 +2447,7 @@
     "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
-    "rymu-release/ci/windows-build.ps1": "74d137358edf7fb6f654bea58e1def813116fbddba71c681feb84361542d01cd"
+    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92"
   },
   "notes": [
     "Original source archive hashes are preserved; explicit reviewedSourceChanges records all source overlays.",

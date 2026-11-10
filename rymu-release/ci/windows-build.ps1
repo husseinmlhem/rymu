@@ -108,7 +108,7 @@ function Verify-VcpkgPortInputs {
         Write-Output "Verified local versioned port tree: $name@$($override.version) $tree"
     }
 }
-function Invoke-IsolatedFlutterTests([string[]]$Tests) {
+function Invoke-IsolatedFlutterTests([string[]]$Tests, [switch]$LoopbackFixtures) {
     $previous = @{
         LOCALAPPDATA = $env:LOCALAPPDATA; APPDATA = $env:APPDATA
         RYMU_WINDOWS_TEST_PROFILE = $env:RYMU_WINDOWS_TEST_PROFILE; PATH = $env:PATH
@@ -121,7 +121,11 @@ function Invoke-IsolatedFlutterTests([string[]]$Tests) {
         $env:RYMU_WINDOWS_TEST_PROFILE = $testProfile
         # RymuNative opens librustdesk.dll by name; use this build's runner.
         $env:PATH = $runner + [IO.Path]::PathSeparator + $previous.PATH
-        Invoke-Checked $flutter (@('test', '--no-pub') + $Tests)
+        $testArguments = @('test', '--no-pub')
+        # This define compiles only test code for its ephemeral loopback server.
+        # It must never be forwarded to the production Flutter build command.
+        if ($LoopbackFixtures) { $testArguments += '--dart-define=RYMU_LOCAL_BUILD=true' }
+        Invoke-Checked $flutter ($testArguments + $Tests)
     } finally {
         foreach ($name in $previous.Keys) {
             if ($null -eq $previous[$name]) {
@@ -131,6 +135,12 @@ function Invoke-IsolatedFlutterTests([string[]]$Tests) {
             }
         }
     }
+}
+function Get-RunnerPayloadHashes {
+    $records = @(Get-ChildItem -LiteralPath $runner -File -Recurse | Sort-Object FullName | ForEach-Object {
+        [ordered]@{ path = [IO.Path]::GetRelativePath($runner, $_.FullName); sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+    })
+    return ($records | ConvertTo-Json -Compress)
 }
 $releaseFlags = @('--config', 'profile.release.opt-level=1', '--config', 'profile.release.lto=false', '--config', 'profile.release.codegen-units=8')
 $features = @('--locked', '--offline', '--features', 'hwcodec,vram,flutter', '--lib', '--release', '--jobs', '4') + $releaseFlags
@@ -211,9 +221,15 @@ try {
                 Invoke-Checked 'python' @((Join-Path $release 'scripts/test-windows-bridge.py'), (Join-Path $runner 'librustdesk.dll'))
                 Invoke-Checked 'python' @('-c', 'import subprocess,sys; result = subprocess.run([sys.argv[1], "--service-control"], check=False, timeout=15); assert result.returncode == 5, result.returncode', (Join-Path $runner 'Rymu.exe'))
                 Push-Location (Join-Path $native 'flutter')
+                $releaseBeforeTests = Get-RunnerPayloadHashes
                 try {
-                    Invoke-IsolatedFlutterTests @('test/rymu_windows_lifecycle_test.dart', 'test/rymu_account_callback_page_test.dart', 'test/rymu_file_locations_test.dart', 'test/rymu_receiving_folder_test.dart')
-                } finally { Pop-Location }
+                    Invoke-IsolatedFlutterTests -Tests @('test/rymu_windows_lifecycle_test.dart') -LoopbackFixtures
+                    Invoke-IsolatedFlutterTests -Tests @('test/rymu_account_callback_page_test.dart', 'test/rymu_file_locations_test.dart', 'test/rymu_receiving_folder_test.dart')
+                } finally {
+                    Pop-Location
+                    if ((Get-RunnerPayloadHashes) -cne $releaseBeforeTests) { throw 'Flutter tests changed the compiled production runner payload.' }
+                    Write-Output 'Verified production runner payload unchanged by Flutter test invocations.'
+                }
             }
             'Package' {
                 Require-Passed 'Test'
