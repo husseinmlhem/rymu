@@ -193,6 +193,7 @@ try {
             }
             'Package' {
                 Require-Passed 'Test'
+                Invoke-Checked 'python' @((Join-Path $PSScriptRoot 'collect_vcpkg_notices.py'), '--installed-root', $env:VCPKG_INSTALLED_ROOT, '--runner', $runner)
                 $wxs = Join-Path $out "Rymu-$Version.wxs"
                 $object = Join-Path $out "Rymu-$Version.wixobj"
                 $msi = Join-Path $out "Rymu-Windows-x64-$Version-CI-Unsigned.msi"
@@ -215,7 +216,7 @@ try {
                 if ($env:GITHUB_STEP_SUMMARY) {
                     ('### PE metadata (unsigned qualification)' + "`n`n" + '```json' + "`n" + $metadataJson + "`n" + '```') | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
                 }
-                $dependencyInventory = & cargo metadata --locked --offline --format-version 1 --filter-platform x86_64-pc-windows-msvc
+                $dependencyInventory = & cargo metadata --locked --offline --features 'hwcodec,vram,flutter' --format-version 1 --filter-platform x86_64-pc-windows-msvc
                 if ($LASTEXITCODE -ne 0) { throw 'Cargo dependency inventory failed.' }
                 $dependencyInventory | Set-Content -LiteralPath (Join-Path $out 'cargo-dependency-inventory.json') -Encoding utf8
             }

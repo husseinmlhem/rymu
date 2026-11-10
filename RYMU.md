@@ -4,6 +4,8 @@ Rymu is Hussein Mlhem's Windows and Android remote-access application, derived f
 
 The imported application source is the already-published Windows 0.1.14 / Android 2077 source archive, SHA-256 `2a4fc09c72fd6760c99dedf9443d34800aabbbea58af46f7c4e56285d8d2cd3a`. Its upstream base is `23e5bb471a040d62f0a6ad52591fb30784265b73`, native tree `88a3f90f3e2bf4d7d684b7d43476f4b069307fb8`, and hbb_common submodule `fae47e024dd83cef6aaecde0aa7d11731df11649`. Git may normalize the archive's recorded CRLF text (including legacy text encodings) to LF; the verifier permits only that documented conversion.
 
+The provenance candidate also records a reviewed `Runner.rc` metadata overlay: the company becomes Hussein Mlhem and the Rymu modification credit is appended while the complete upstream copyright notice remains. Original archive hashes are retained separately from the overlay's before/after and patch hashes. This candidate is changed source, not a claim that its future binaries correspond byte-for-byte to the older source archive. A distributed update requires its corresponding updated source.
+
 - [Official application website](https://rymu.iptvora-server.workers.dev/)
 - [Released Windows installer](https://rymu.iptvora-server.workers.dev/api/v1/releases/latest/windows-installer)
 - [Released corresponding source](https://rymu.iptvora-server.workers.dev/api/v1/releases/latest/source)

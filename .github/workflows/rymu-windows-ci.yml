@@ -54,6 +54,10 @@ jobs:
           architecture: x64
       - name: Verify exact public source baseline and CI inputs
         run: |
+          python rymu-release/ci/test_verify_candidate.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python rymu-release/ci/test_collect_vcpkg_notices.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python rymu-release/ci/verify_candidate.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & rymu-release/ci/windows-build.ps1 -Stage Validate -Version $env:CI_RELEASE_VERSION
