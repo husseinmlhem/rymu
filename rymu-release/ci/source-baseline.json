@@ -1266,9 +1266,9 @@
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
     "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92",
-    "rymu-release/ci/store-msix-smoke.ps1": "d2878ddb4c8a5400ddc3885f90c56b0d2877bf5b87f0818f5a045f677cc083d4",
+    "rymu-release/ci/store-msix-smoke.ps1": "8763bf4e22fb8931bd161bac731e8f081ef2f289400b2b36cad95bd194bbab86",
     "rymu-release/ci/store-msix-1.0.14.0-payload.json": "f27bf9e1ad78c8135852d5e13af258dc2e685cca97ce68541a3f9d8ccd4b1875",
-    "rymu-release/ci/test_store_msix_smoke.ps1": "13a577f4226810f35c9c8f28ca4349079d5a5d9b466ca2fde98e615fb3788f8a",
+    "rymu-release/ci/test_store_msix_smoke.ps1": "4bfdc4ed61a7c58d2331854954b7a32ff4aecdac4db61554f6c5b5b6b47a4283",
     "rymu-release/ci/store-msix-smoke.md": "ef2d585822e836be93cab4b71827ac63e235ce898e6d461047aa057d3d7bd6e7"
   },
   "lineEndingNormalizedSha256": {
@@ -2452,9 +2452,9 @@
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
     "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92",
-    "rymu-release/ci/store-msix-smoke.ps1": "d2878ddb4c8a5400ddc3885f90c56b0d2877bf5b87f0818f5a045f677cc083d4",
+    "rymu-release/ci/store-msix-smoke.ps1": "8763bf4e22fb8931bd161bac731e8f081ef2f289400b2b36cad95bd194bbab86",
     "rymu-release/ci/store-msix-1.0.14.0-payload.json": "9a381e1b98fde2deee73ff99efdc386ac71293ca2c0d0b4f71843cfe53f96d22",
-    "rymu-release/ci/test_store_msix_smoke.ps1": "13a577f4226810f35c9c8f28ca4349079d5a5d9b466ca2fde98e615fb3788f8a",
+    "rymu-release/ci/test_store_msix_smoke.ps1": "4bfdc4ed61a7c58d2331854954b7a32ff4aecdac4db61554f6c5b5b6b47a4283",
     "rymu-release/ci/store-msix-smoke.md": "ef2d585822e836be93cab4b71827ac63e235ce898e6d461047aa057d3d7bd6e7"
   },
   "notes": [

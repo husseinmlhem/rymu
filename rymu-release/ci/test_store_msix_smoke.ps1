@@ -15,6 +15,8 @@ function Expect-Rejected([scriptblock]$Body) {
 }
 $context = @{ Actions='true'; Environment='github-hosted'; Repository='husseinmlhem/rymu'; Event='workflow_dispatch'; Image='win25'; RunId='123'; Attempt='1' }
 Assert-HostedContext $context; $script:Cases++
+$updatedImageContext = $context.Clone(); $updatedImageContext.Image = 'win25-vs2026'
+Assert-HostedContext $updatedImageContext; $script:Cases++
 foreach ($key in @('Actions','Environment','Repository','Event','Image','RunId','Attempt')) {
     $bad = $context.Clone(); $bad[$key] = 'invalid'
     Expect-Rejected { Assert-HostedContext $bad }

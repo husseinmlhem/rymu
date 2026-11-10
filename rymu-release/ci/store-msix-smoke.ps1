@@ -20,7 +20,7 @@ function Assert-NumericId([string]$Value) {
 function Assert-HostedContext($Context) {
     if ($Context.Actions -ne 'true' -or $Context.Environment -ne 'github-hosted' -or
         $Context.Repository -cne $script:Repository -or $Context.Event -ne 'workflow_dispatch' -or
-        $Context.Image -ne 'win25' -or $Context.RunId -notmatch '^[1-9][0-9]*$' -or
+        $Context.Image -notin @('win25', 'win25-vs2026') -or $Context.RunId -notmatch '^[1-9][0-9]*$' -or
         $Context.Attempt -notmatch '^[1-9][0-9]*$') {
         throw 'Only the manually dispatched standard Windows Server 2025 GitHub job is allowed.'
     }
@@ -132,7 +132,9 @@ if ($Stage -eq 'Validate') {
     [ordered]@{ status = 'configuration-validated-only'; payloadFiles = 100; packageSha256 = $script:ExpectedHash; installed = $false } | ConvertTo-Json
     return
 }
-Assert-HostedContext @{ Actions = $env:GITHUB_ACTIONS; Environment = $env:RUNNER_ENVIRONMENT; Repository = $env:GITHUB_REPOSITORY; Event = $env:GITHUB_EVENT_NAME; Image = $env:ImageOS; RunId = $env:GITHUB_RUN_ID; Attempt = $env:GITHUB_RUN_ATTEMPT }
+$hostContext = @{ Actions = $env:GITHUB_ACTIONS; Environment = $env:RUNNER_ENVIRONMENT; Repository = $env:GITHUB_REPOSITORY; Event = $env:GITHUB_EVENT_NAME; Image = $env:ImageOS; RunId = $env:GITHUB_RUN_ID; Attempt = $env:GITHUB_RUN_ATTEMPT }
+$hostContext | ConvertTo-Json -Compress
+Assert-HostedContext $hostContext
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or !$env:RUNNER_TEMP) { throw 'A disposable Windows runner is required.' }
 $os = Get-CimInstance Win32_OperatingSystem
 if ([int]$os.BuildNumber -lt 26100 -or [int]$os.ProductType -notin @(2, 3) -or $os.Caption -notmatch 'Windows Server 2025') { throw 'Only the declared Server 2025 test scope is allowed.' }
