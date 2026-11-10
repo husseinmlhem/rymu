@@ -1260,12 +1260,16 @@
     "rymu-release/ci/patches/privacy-test-layout.patch": "68e1554fd8dbd28a90b33f38cd3436a6260f1dd993ae86ebf95006f9e392b07a",
     "rymu-release/ci/patches/runner-publisher-attribution.patch": "90dbc31042502be5eb9da6a90f7ae88af62c43b5f4cf2b42944e273b6fe02464",
     "rymu-release/.gitattributes": "e135f27898f79ee5cb6f3ff82afbe27e09dae0af8d82a3a8eedae645358457da",
-    ".github/workflows/rymu-windows-ci.yml": "8dc0ed3f1d149576c14b39ad8a451694e6ecbdd2390271493e1c9cccbf857793",
+    ".github/workflows/rymu-windows-ci.yml": "dc3b40df1e63e5fbd78d496fbad88e64c58f8aba6cbd89a9b747111619dbe372",
     "rymu-release/ci/test_collect_vcpkg_notices.py": "fea4103ae8065d127c1d9fba02dd3311decc34f6fe13fa48b19528feb2a86b04",
     "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
-    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92"
+    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92",
+    "rymu-release/ci/store-msix-smoke.ps1": "d2878ddb4c8a5400ddc3885f90c56b0d2877bf5b87f0818f5a045f677cc083d4",
+    "rymu-release/ci/store-msix-1.0.14.0-payload.json": "f27bf9e1ad78c8135852d5e13af258dc2e685cca97ce68541a3f9d8ccd4b1875",
+    "rymu-release/ci/test_store_msix_smoke.ps1": "13a577f4226810f35c9c8f28ca4349079d5a5d9b466ca2fde98e615fb3788f8a",
+    "rymu-release/ci/store-msix-smoke.md": "ef2d585822e836be93cab4b71827ac63e235ce898e6d461047aa057d3d7bd6e7"
   },
   "lineEndingNormalizedSha256": {
     "rymu-release/SOURCE-RECORD.json": "1ecdc8b146bda7edc1bcc169b1ce113e4d0faf24a2c1de488891b664e1f1141a",
@@ -2442,12 +2446,16 @@
     "rymu-release/ci/patches/privacy-test-layout.patch": "68e1554fd8dbd28a90b33f38cd3436a6260f1dd993ae86ebf95006f9e392b07a",
     "rymu-release/ci/patches/runner-publisher-attribution.patch": "90dbc31042502be5eb9da6a90f7ae88af62c43b5f4cf2b42944e273b6fe02464",
     "rymu-release/.gitattributes": "e135f27898f79ee5cb6f3ff82afbe27e09dae0af8d82a3a8eedae645358457da",
-    ".github/workflows/rymu-windows-ci.yml": "8dc0ed3f1d149576c14b39ad8a451694e6ecbdd2390271493e1c9cccbf857793",
+    ".github/workflows/rymu-windows-ci.yml": "dc3b40df1e63e5fbd78d496fbad88e64c58f8aba6cbd89a9b747111619dbe372",
     "rymu-release/ci/test_collect_vcpkg_notices.py": "fea4103ae8065d127c1d9fba02dd3311decc34f6fe13fa48b19528feb2a86b04",
     "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
-    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92"
+    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92",
+    "rymu-release/ci/store-msix-smoke.ps1": "d2878ddb4c8a5400ddc3885f90c56b0d2877bf5b87f0818f5a045f677cc083d4",
+    "rymu-release/ci/store-msix-1.0.14.0-payload.json": "9a381e1b98fde2deee73ff99efdc386ac71293ca2c0d0b4f71843cfe53f96d22",
+    "rymu-release/ci/test_store_msix_smoke.ps1": "13a577f4226810f35c9c8f28ca4349079d5a5d9b466ca2fde98e615fb3788f8a",
+    "rymu-release/ci/store-msix-smoke.md": "ef2d585822e836be93cab4b71827ac63e235ce898e6d461047aa057d3d7bd6e7"
   },
   "notes": [
     "Original source archive hashes are preserved; explicit reviewedSourceChanges records all source overlays.",

@@ -3,6 +3,22 @@ name: Rymu Windows source build
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Source build or isolated submitted-MSIX registration test
+        required: true
+        default: source-build
+        type: choice
+        options:
+          - source-build
+          - store-msix-smoke
+      draft_release_id:
+        description: Existing internal draft release ID, only for Store smoke
+        required: false
+        type: string
+      draft_asset_id:
+        description: Exact submitted MSIX draft asset ID, only for Store smoke
+        required: false
+        type: string
       version:
         description: Unpublished three-part MSI qualification version
         required: true
@@ -18,11 +34,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: rymu-windows-source-${{ github.ref }}
+  group: ${{ inputs.mode == 'store-msix-smoke' && 'rymu-store-msix-smoke' || 'rymu-windows-source' }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   windows:
+    if: inputs.mode != 'store-msix-smoke'
     # Standard hosted runner only; no larger or self-hosted runners.
     runs-on: windows-2022
     timeout-minutes: 240
@@ -95,7 +112,46 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-# This workflow builds and uploads qualification evidence only. It does not sign,
-# publish, enable paid services, or assert SignPath acceptance. After acceptance,
+  store-msix-smoke:
+    if: inputs.mode == 'store-msix-smoke'
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Preserve reviewed line endings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - name: Check out reviewed test logic and exact source metadata
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+          fetch-depth: 1
+      - name: Verify test guards and reviewed input hashes
+        run: |
+          & rymu-release/ci/test_store_msix_smoke.ps1
+          python rymu-release/ci/verify_candidate.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & rymu-release/ci/store-msix-smoke.ps1 -Stage Validate
+      - name: Prove read-only access to the exact unpublished draft asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          DRAFT_ASSET_ID: ${{ inputs.draft_asset_id }}
+        run: '& rymu-release/ci/store-msix-smoke.ps1 -Stage Download -ReleaseId $env:DRAFT_RELEASE_ID -AssetId $env:DRAFT_ASSET_ID'
+      - name: Register and remove a payload-identical test-signed copy on Server 2025
+        shell: powershell
+        run: '& rymu-release/ci/store-msix-smoke.ps1 -Stage Install'
+      # No artifact upload, release publication, account sign-in, app launch or WACK claim.
+      # The VM, test-signed copy and ephemeral certificate must never leave this job.
+
+# Source mode builds unsigned qualification evidence. Store smoke only test-signs
+# a disposable VM copy; neither mode signs for distribution, publishes, enables
+# paid services, or asserts SignPath acceptance. After acceptance,
 # a reviewed signing job can use the unsigned step's artifact-id with the approved
 # project/policy and mandatory human approval. Do not import local installer files.
