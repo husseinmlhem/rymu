@@ -367,6 +367,9 @@ class FileController {
   int _directoryRequestGeneration = 0;
   final JobController jobController;
   final WeakReference<FFI> rootState;
+  // Rymu's receiving folder takes priority over a previous peer's browsing
+  // location. Other file managers retain the existing saved-directory flow.
+  Future<String> Function()? startingDirectory;
 
   final DirectoryData Function() getOtherSideDirectoryData;
   late final SelectedItems selectedItems = SelectedItems(isLocal: isLocal);
@@ -411,6 +414,38 @@ class FileController {
     return DirectoryData(directory.value, options.value);
   }
 
+  Future<List<RymuFileLocation>> windowsLocations() async {
+    if (isLocal) throw StateError('Remote Windows locations require a file session');
+    final listing = await fileFetcher.fetchDirectory(_rymuLocationsQuery, false, false);
+    if (listing.path != _rymuLocationsQuery || listing.entries.length != 1) {
+      throw const FormatException('Invalid Windows locations response');
+    }
+    return RymuFileLocation.decode(listing.entries.single.name);
+  }
+
+  Future<bool> _confirmWindowsUploadCopy(String original, String alternate) async {
+    final accepted = await dialogManager?.show<bool>((_, close, context) {
+      final arabic = Localizations.localeOf(context).languageCode == 'ar';
+      return CustomAlertDialog(
+        title: Text(arabic ? 'يوجد ملف بهذا الاسم' : 'A file with this name exists'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(original, textDirection: TextDirection.ltr),
+          const SizedBox(height: 8),
+          Text(arabic ? 'حفظ النسخة الجديدة باسم' : 'Save the new copy as'),
+          Text(alternate, textDirection: TextDirection.ltr),
+        ]),
+        actions: [
+          TextButton(onPressed: () => close(false), child: Text(translate('Skip'))),
+          FilledButton(
+            onPressed: () => close(true),
+            child: Text(arabic ? 'الاحتفاظ بالنسختين' : 'Keep both'),
+          ),
+        ],
+      );
+    });
+    return accepted == true;
+  }
+
   Future<void> _restoreWorkspaceHome(String savedDir) async {
     if (savedDir.isEmpty || AndroidDocuments.isPath(savedDir)) return;
     final workspace = await AndroidDocuments.workspace();
@@ -433,6 +468,29 @@ class FileController {
         : rootState.target?.ffiModel.pi.platform == kPeerPlatformWindows;
 
     await Future.delayed(Duration(milliseconds: 100));
+
+    final loadStartingDirectory = startingDirectory;
+    if (loadStartingDirectory != null) {
+      _directoryRequestGeneration++;
+      directory.value = FileDirectory();
+      selectedItems.clear();
+      try {
+        final destination = await loadStartingDirectory();
+        if (isAndroid && isLocal) {
+          await _restoreWorkspaceHome(destination);
+          if (AndroidDocuments.isRoot(destination)) homePath = destination;
+        }
+        if (await _openDirectoryPath(destination, isBack: true)) return;
+        await Future.delayed(const Duration(seconds: 1));
+        if (await _openDirectoryPath(destination, isBack: true)) return;
+      } catch (_) {
+        // Keep the destination empty instead of falling back to a different
+        // location after a grant is revoked or the folder becomes unavailable.
+      }
+      showToast(translate('Unable to open the receiving folder. Choose the folder again.'));
+      // Do not silently receive files into another folder after access is lost.
+      return;
+    }
 
     var savedDir = (await bind.sessionGetPeerOption(
         sessionId: sessionId, name: isLocal ? "local_dir" : "remote_dir"));
@@ -475,6 +533,7 @@ class FileController {
 
   Future<void> close() async {
     // save config
+    startingDirectory = null;
     Map<String, String> msgMap = {};
     msgMap[isLocal ? "local_dir" : "remote_dir"] = directory.value.path;
     msgMap[isLocal ? "local_show_hidden" : "remote_show_hidden"] =
@@ -606,6 +665,7 @@ class FileController {
   void initDirAndHome(Map<String, dynamic> evt) {
     try {
       final fd = FileDirectory.fromJson(jsonDecode(evt['value']));
+      if (fd.path == _rymuLocationsQuery) return;
       final isHomeResponse = fileFetcher.isLikelyRemoteHomeResponse(fd.path);
       fd.format(options.value.isWindows, sort: sortBy.value);
       if (fd.id > 0) {
@@ -646,11 +706,27 @@ class FileController {
     final isRemoteToLocal = !isLocal;
 
     final toPath = otherSideData.directory.path;
+    if (toPath.isEmpty) {
+      showToast(translate('Open a destination folder before transferring files.'));
+      return;
+    }
     final isWindows = otherSideData.options.isWindows;
     final showHidden = otherSideData.options.showHidden;
-    final transferJobs = <(Entry, int)>[];
+    final transferJobs = <(Entry, int, String)>[];
     final transferJobIds = <int>[];
-    for (var from in items.items) {
+    final windowsUpload = !isRemoteToLocal && isWindows && !isWeb;
+    final taken = otherSideData.directory.entries
+        .map((entry) => entry.name.toLowerCase()).toSet();
+    for (final from in items.items.toList()) {
+      var name = from.name;
+      if (windowsUpload && taken.contains(name.toLowerCase())) {
+        final alternate = windowsUploadCopyName(name, taken, directory: from.isDirectory);
+        if (alternate == null || !await _confirmWindowsUploadCopy(name, alternate)) {
+          continue;
+        }
+        name = alternate;
+      }
+      if (windowsUpload) taken.add(name.toLowerCase());
       final jobID = jobController.addTransferJob(from, isRemoteToLocal);
       // Keep this check before PathUtil.join: Rust does not receive the selected
       // root separately, and Web transfers bypass Rust validation.
@@ -663,22 +739,20 @@ class FileController {
         });
         continue;
       }
-      transferJobs.add((from, jobID));
+      transferJobs.add((from, jobID, PathUtil.join(toPath, name, isWindows)));
       transferJobIds.add(jobID);
     }
     jobController.registerTransferConflictBatch(transferJobIds);
-    for (final (from, jobID) in transferJobs) {
+    for (final (from, jobID, destination) in transferJobs) {
       bind.sessionSendFiles(
           sessionId: sessionId,
           actId: jobID,
           path: from.path,
-          to: PathUtil.join(toPath, from.name, isWindows),
+          to: destination,
           fileNum: 0,
           includeHidden: showHidden,
           isRemote: isRemoteToLocal,
           isDir: from.isDirectory);
-      debugPrint(
-          "path: ${from.path}, toPath: $toPath, to: ${PathUtil.join(toPath, from.name, isWindows)}");
     }
 
     if (isWeb ||
@@ -688,7 +762,7 @@ class FileController {
     }
 
     if (isRemoteToLocal) {
-      for (final (entry, jobID) in transferJobs) {
+      for (final (entry, jobID, _) in transferJobs) {
         if (entry.isDirectory) {
           await _downloadEmptyDirectories(entry, jobID, otherSideData);
         }
@@ -696,36 +770,16 @@ class FileController {
       return;
     }
 
-    final List<Entry> entrys = items.items.toList();
-    var isRemote = isLocal == true ? true : false;
-
-    await Future.forEach(entrys, (Entry item) async {
-      if (!item.isDirectory) {
-        return;
-      }
-
-      final List<String> paths = [];
-
+    for (final (item, _, destination) in transferJobs) {
+      if (!item.isDirectory) continue;
       final emptyDirs =
           await fileFetcher.readEmptyDirs(item.path, isLocal, showHidden);
-
-      if (emptyDirs.isEmpty) {
-        return;
-      } else {
-        for (var dir in emptyDirs) {
-          paths.add(dir.path);
-        }
+      for (final dir in emptyDirs) {
+        final mapped = DownloadPaths.mapDirectory(item.path, dir.path, destination,
+            remoteWindows: options.value.isWindows, localWindows: isWindows);
+        await createDirWithRemote(mapped, true);
       }
-
-      final dirs = paths.map((path) {
-        return PathUtil.getOtherSidePath(directory.value.path, path,
-            options.value.isWindows, toPath, isWindows);
-      });
-
-      for (var dir in dirs) {
-        createDirWithRemote(dir, isRemote);
-      }
-    });
+    }
   }
 
   Future<void> _downloadEmptyDirectories(
@@ -1638,6 +1692,7 @@ class FileFetcher {
         if (_completeRemoteReadTask(fd.path, fd)) {
           return;
         }
+        if (fd.path == _rymuLocationsQuery) return;
         // A Home request uses an empty path but returns its resolved path.
         if (isLikelyRemoteHomeResponse(fd.path)) {
           _completeRemoteReadTask("", fd);
@@ -1747,6 +1802,55 @@ class FileFetcher {
     } catch (e) {
       return Future.error(e);
     }
+  }
+}
+
+const _rymuLocationsQuery = 'rymu:windows-locations:v1';
+
+String? windowsUploadCopyName(String name, Set<String> taken,
+    {required bool directory}) {
+  final extensionIndex = directory ? -1 : name.lastIndexOf('.');
+  final hasExtension = extensionIndex > 0;
+  final stem = hasExtension ? name.substring(0, extensionIndex) : name;
+  final extension = hasExtension ? name.substring(extensionIndex) : '';
+  for (var i = 2; i <= 1024; i++) {
+    final copy = '$stem ($i)$extension';
+    if (copy.length > 255 || !DownloadPaths.validName(copy, windows: true)) {
+      return null;
+    }
+    if (!taken.contains(copy.toLowerCase())) return copy;
+  }
+  return null;
+}
+
+class RymuFileLocation {
+  const RymuFileLocation(this.kind, this.path, this.available);
+
+  final String kind;
+  final String? path;
+  final bool available;
+
+  bool get isDrive => _driveKinds.contains(kind);
+
+  static const _driveKinds = {'local', 'removable', 'network', 'optical', 'ram', 'drive'};
+  static const _folderKinds = {
+    'desktop', 'downloads', 'documents', 'pictures', 'videos', 'music', 'profile', 'exchange',
+  };
+
+  static List<RymuFileLocation> decode(String payload) {
+    final value = jsonDecode(payload);
+    if (value is! List || value.length > 34) {
+      throw const FormatException('Invalid Windows locations response');
+    }
+    return value.map((entry) {
+      if (entry case {'kind': final String kind, 'path': final String? path,
+          'available': final bool available}
+          when (_driveKinds.contains(kind) || _folderKinds.contains(kind))
+              && (!available || (path != null && path.isNotEmpty))) {
+        return RymuFileLocation(kind, path, available);
+      }
+      throw const FormatException('Invalid Windows file location');
+    }).toList(growable: false);
   }
 }
 

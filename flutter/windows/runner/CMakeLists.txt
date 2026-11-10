@@ -9,6 +9,9 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "rymu_tray.cpp"
+  "rymu_packaged_startup.cpp"
+  "rymu_installer_startup.cpp"
   "utils.cpp"
   "win32_desktop.cpp"
   "win32_window.cpp"
@@ -16,6 +19,8 @@ add_executable(${BINARY_NAME} WIN32
   "Runner.rc"
   "runner.exe.manifest"
 )
+set_source_files_properties("rymu_tray.cpp" PROPERTIES COMPILE_OPTIONS "/utf-8")
+set_source_files_properties("rymu_packaged_startup.cpp" PROPERTIES COMPILE_OPTIONS "/std:c++20;/utf-8")
 
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
@@ -33,7 +38,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
-target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
+target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app shell32 advapi32 windowsapp)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

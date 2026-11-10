@@ -1,3 +1,6 @@
+import 'rymu/windows_home.dart';
+import 'rymu_android/home.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -133,14 +136,6 @@ Future<void> initEnv(String appType) async {
 void runMainApp(bool startService) async {
   // register uni links
   await initEnv(kAppTypeMain);
-  checkUpdate();
-  // trigger connection status updater
-  await bind.mainCheckConnectStatus();
-  if (startService) {
-    gFFI.serverModel.startService();
-  }
-  await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
-  gFFI.userModel.refreshCurrentUser();
   runApp(App());
 
   bool? alwaysOnTop;
@@ -150,15 +145,15 @@ void runMainApp(bool startService) async {
   }
 
   // Set window option.
-  WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
-      isMainWindow: true, alwaysOnTop: alwaysOnTop);
+  WindowOptions windowOptions = isWindows
+      ? const WindowOptions(size: Size(960, 600), center: true,
+          titleBarStyle: TitleBarStyle.normal)
+      : getHiddenTitleBarWindowOptions(isMainWindow: true, alwaysOnTop: alwaysOnTop);
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     // Restore the location of the main window before window hide or show.
     await restoreWindowPosition(WindowType.Main);
     // Check the startup argument, if we successfully handle the argument, we keep the main window hidden.
-    final handledByUniLinks = await initUniLinks();
-    debugPrint("handled by uni links: $handledByUniLinks");
-    if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs)) {
+    if (!isWindows && (await initUniLinks() || handleUriLink(cmdArgs: kBootArgs))) {
       windowManager.hide();
     } else {
       windowManager.show();
@@ -167,7 +162,7 @@ void runMainApp(bool startService) async {
       rustDeskWinManager.registerActiveWindow(kWindowMainId);
     }
     windowManager.setOpacity(1);
-    windowManager.setTitle(getWindowName());
+    windowManager.setTitle(isWindows ? 'Rymu' : getWindowName());
     // Do not use `windowManager.setResizable()` here.
     setResizable(!bind.isIncomingOnly());
   });
@@ -175,14 +170,10 @@ void runMainApp(bool startService) async {
 
 void runMobileApp() async {
   await initEnv(kAppTypeMain);
-  checkUpdate();
   if (isAndroid) androidChannelInit();
   if (isAndroid) platformFFI.syncAndroidServiceAppDirConfigPath();
   draggablePositions.load();
-  await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
-  gFFI.userModel.refreshCurrentUser();
   runApp(App());
-  await initUniLinks();
 }
 
 void runMultiWindow(
@@ -501,11 +492,13 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           theme: MyTheme.lightTheme,
           darkTheme: MyTheme.darkTheme,
           themeMode: MyTheme.currentThemeMode(),
-          home: isDesktop
-              ? const DesktopTabPage()
+          home: isWindows
+              ? const RymuWindowsHome()
+              : isDesktop
+                  ? const DesktopTabPage()
               : isWeb
                   ? WebHomePage()
-                  : HomePage(),
+                  : isAndroid ? const RymuAndroidHome() : HomePage(),
           localizationsDelegates: const [
             GlobalMaterialLocalizations.delegate,
             GlobalWidgetsLocalizations.delegate,
@@ -517,16 +510,9 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             BotToastNavigatorObserver(),
           ],
           builder: isAndroid
-              ? (context, child) => AccessibilityListener(
-                    child: MediaQuery(
-                      data: MediaQuery.of(context).copyWith(
-                        textScaler: TextScaler.linear(1.0),
-                      ),
-                      child: child ?? Container(),
-                    ),
-                  )
+              ? (context, child) => AccessibilityListener(child: child ?? Container())
               : (context, child) {
-                  child = _keepScaleBuilder(context, child);
+                  if (!isWindows) child = _keepScaleBuilder(context, child);
                   child = botToastBuilder(context, child);
                   if ((isDesktop && desktopType == DesktopType.main) ||
                       isWebDesktop) {
@@ -534,6 +520,8 @@ class _AppState extends State<App> with WidgetsBindingObserver {
                   }
                   if (isLinux) {
                     return buildVirtualWindowFrame(context, child);
+                  } else if (isWindows && desktopType == DesktopType.main) {
+                    return child ?? Container();
                   } else {
                     return workaroundWindowBorder(context, child);
                   }

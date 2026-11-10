@@ -20,6 +20,9 @@ import 'package:window_size/window_size.dart' as window_size;
 import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
+import '../../rymu/display_mapping.dart';
+import '../../rymu/glass.dart';
+import '../../rymu/session_language.dart';
 import '../../common/shared_state.dart';
 import './popup_menu.dart';
 import './kb_layout_type_chooser.dart';
@@ -325,8 +328,10 @@ class ToolbarState {
 }
 
 class _ToolbarTheme {
-  static const Color blueColor = MyTheme.button;
-  static const Color hoverBlueColor = MyTheme.accent;
+  static Color get blueColor =>
+      isWindows ? const Color(0xff373737) : MyTheme.button;
+  static Color get hoverBlueColor =>
+      isWindows ? const Color(0xff515151) : MyTheme.accent;
   static Color inactiveColor = Colors.grey[800]!;
   static Color hoverInactiveColor = Colors.grey[850]!;
 
@@ -342,21 +347,32 @@ class _ToolbarTheme {
   static const double iconRadius = 8;
   static const double elevation = 3;
 
+  static Widget glyph(IconData icon, Color color) => SizedBox.square(
+        dimension: buttonSize,
+        child: Icon(icon, size: 20, color: color),
+      );
+
   static double dividerSpaceToAction = isWindows ? 8 : 14;
 
-  static double menuBorderRadius = isWindows ? 5.0 : 7.0;
-  static EdgeInsets menuPadding = isWindows
-      ? EdgeInsets.fromLTRB(4, 12, 4, 12)
-      : EdgeInsets.fromLTRB(6, 14, 6, 14);
-  static const double menuButtonBorderRadius = 3.0;
+  static double menuBorderRadius = isWindows ? 14.0 : 7.0;
+  static EdgeInsets menuPadding =
+      isWindows ? const EdgeInsets.all(6) : EdgeInsets.fromLTRB(6, 14, 6, 14);
+  static double get menuButtonBorderRadius => isWindows ? 8.0 : 3.0;
 
-  static Color borderColor(BuildContext context) =>
-      MyTheme.color(context).border3 ?? MyTheme.border;
+  static Color borderColor(BuildContext context) => isWindows
+      ? RymuGlassPalette.of(context).line
+      : MyTheme.color(context).border3 ?? MyTheme.border;
 
-  static Color? dividerColor(BuildContext context) =>
-      MyTheme.color(context).divider;
+  static Color? dividerColor(BuildContext context) => isWindows
+      ? RymuGlassPalette.of(context).line
+      : MyTheme.color(context).divider;
 
   static MenuStyle defaultMenuStyle(BuildContext context) => MenuStyle(
+        backgroundColor: isWindows
+            ? WidgetStatePropertyAll(RymuGlassPalette.of(context).canvas)
+            : null,
+        surfaceTintColor:
+            isWindows ? const WidgetStatePropertyAll(Colors.transparent) : null,
         side: MaterialStateProperty.all(BorderSide(
           width: 1,
           color: borderColor(context),
@@ -497,6 +513,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
 
   PeerInfo get pi => widget.ffi.ffiModel.pi;
   FfiModel get ffiModel => widget.ffi.ffiModel;
+  bool get compact => isWindows && widget.ffi.connType == ConnType.defaultConn;
 
   triggerAutoHide() => _debouncerHide.value = _debouncerHide.value + 1;
 
@@ -690,8 +707,9 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
           !_dockingOptionsInitialized.value) {
         return const SizedBox.shrink();
       }
-      // If toolbar is hidden, return empty widget
-      if (hide.value) {
+      final hidden = hide.value;
+      // Retain the recovery handle on Windows even when the full toolbar is hidden.
+      if (hidden && !compact) {
         return const SizedBox.shrink();
       }
       final edge = _edge.value;
@@ -712,7 +730,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         alignment: _alignmentForEdge(edge, _fraction.value),
         child: KeyedSubtree(
           key: _toolbarKey,
-          child: collapse.isFalse
+          child: collapse.isFalse && !hidden
               ? _buildToolbar(context, edge, isHorizontal)
               : _buildDraggableCollapse(context, edge, isHorizontal),
         ),
@@ -742,7 +760,9 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
 
   Widget _buildDragPreview(BuildContext context, _ToolbarEdge edge,
       double fraction, Size? measured) {
-    final color = Theme.of(context).colorScheme.primary;
+    final color = compact
+        ? RymuGlassPalette.of(context).ink
+        : Theme.of(context).colorScheme.primary;
     // Use the measured live toolbar size so collapsed vs expanded looks
     // right. The current orientation may differ from the preview orientation
     // (e.g. dragging a top-docked toolbar toward the left edge), so swap the
@@ -769,33 +789,37 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         triggerAutoHide();
       }
       final borderRadius = _collapseHandleBorderRadius(edge);
+      final handle = _DraggableShowHide(
+        id: widget.id,
+        ffi: widget.ffi,
+        sessionId: widget.ffi.sessionId,
+        dragging: _dragging,
+        fraction: _fraction,
+        edge: _edge,
+        previewEdge: _previewEdge,
+        previewFraction: _previewFraction,
+        toolbarSize: _toolbarSize,
+        markDragEpoch: _markToolbarDragEpoch,
+        syncDockingOptionsAfterDragIfNeeded:
+            _syncDockingOptionsAfterDragIfNeeded,
+        isHorizontal: isHorizontal,
+        multiEdgeEnabled: _multiEdgeEnabled.value,
+        toolbarState: widget.state,
+        setFullscreen: _setFullscreen,
+        setMinimize: _minimize,
+        borderRadius: borderRadius,
+        compact: compact,
+      );
       return Offstage(
         offstage: _dragging.isTrue,
-        child: Material(
-          elevation: _ToolbarTheme.elevation,
-          shadowColor: MyTheme.color(context).shadow,
-          borderRadius: borderRadius,
-          child: _DraggableShowHide(
-            id: widget.id,
-            ffi: widget.ffi,
-            sessionId: widget.ffi.sessionId,
-            dragging: _dragging,
-            fraction: _fraction,
-            edge: _edge,
-            previewEdge: _previewEdge,
-            previewFraction: _previewFraction,
-            toolbarSize: _toolbarSize,
-            markDragEpoch: _markToolbarDragEpoch,
-            syncDockingOptionsAfterDragIfNeeded:
-                _syncDockingOptionsAfterDragIfNeeded,
-            isHorizontal: isHorizontal,
-            multiEdgeEnabled: _multiEdgeEnabled.value,
-            toolbarState: widget.state,
-            setFullscreen: _setFullscreen,
-            setMinimize: _minimize,
-            borderRadius: borderRadius,
-          ),
-        ),
+        child: compact
+            ? RymuGlass(radius: 11, blur: true, child: handle)
+            : Material(
+                elevation: _ToolbarTheme.elevation,
+                shadowColor: MyTheme.color(context).shadow,
+                borderRadius: borderRadius,
+                child: handle,
+              ),
       );
     });
   }
@@ -803,7 +827,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   Widget _buildToolbar(
       BuildContext context, _ToolbarEdge edge, bool isHorizontal) {
     final List<Widget> toolbarItems = [];
-    toolbarItems.add(_PinMenu(state: widget.state));
+    if (!compact) toolbarItems.add(_PinMenu(state: widget.state));
     toolbarItems.add(Obx(() {
       final privacyModeState = PrivacyModeState.find(widget.id);
       if ((privacyModeState.isEmpty ||
@@ -815,7 +839,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         return const Offstage();
       }
     }));
-    if (!isWebDesktop) {
+    if (!compact && !isWebDesktop) {
       toolbarItems.add(_MobileActionMenu(ffi: widget.ffi));
     }
 
@@ -828,30 +852,40 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
             id: widget.id,
             ffi: widget.ffi,
             edge: edge,
+            compact: compact,
             setRemoteState: widget.setRemoteState);
       } else {
         return Offstage();
       }
     }));
 
-    toolbarItems
-        .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
-    toolbarItems.add(_DisplayMenu(
+    if (!compact) {
+      toolbarItems.add(_ControlMenu(id: widget.id, ffi: widget.ffi));
+    }
+    final settings = _DisplayMenu(
       id: widget.id,
       ffi: widget.ffi,
       state: widget.state,
       setFullscreen: _setFullscreen,
-    ));
+      compact: compact,
+    );
+    if (!compact) toolbarItems.add(settings);
     // Do not show keyboard for camera connection type.
     if (widget.ffi.connType == ConnType.defaultConn) {
-      toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
+      toolbarItems
+          .add(_KeyboardMenu(id: widget.id, ffi: widget.ffi, compact: compact));
     }
-    toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
-    if (!isWeb) {
-      toolbarItems.add(_VoiceCallMenu(id: widget.id, ffi: widget.ffi));
+    if (compact) {
+      toolbarItems.add(settings);
+    } else {
+      toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
+      if (!isWeb) {
+        toolbarItems.add(_VoiceCallMenu(id: widget.id, ffi: widget.ffi));
+        toolbarItems.add(_RecordMenu());
+      }
     }
-    if (!isWeb) toolbarItems.add(_RecordMenu());
-    toolbarItems.add(_CloseMenu(id: widget.id, ffi: widget.ffi));
+    toolbarItems
+        .add(_CloseMenu(id: widget.id, ffi: widget.ffi, compact: compact));
     final toolbarBorderRadius = BorderRadius.all(Radius.circular(4.0));
     // innerAxis: how the toolbar icons themselves flow.
     // outerAxis: how the toolbar block and the handle stack against each other
@@ -861,34 +895,33 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
     final spacer = isHorizontal
         ? SizedBox(width: _ToolbarTheme.buttonHMargin * 2)
         : SizedBox(height: _ToolbarTheme.buttonHMargin * 2);
-    final toolbarMaterial = Material(
-      elevation: _ToolbarTheme.elevation,
-      shadowColor: MyTheme.color(context).shadow,
-      borderRadius: toolbarBorderRadius,
-      color: Theme.of(context)
-          .menuBarTheme
-          .style
-          ?.backgroundColor
-          ?.resolve(MaterialState.values.toSet()),
-      child: SingleChildScrollView(
-        scrollDirection: innerAxis,
-        child: Theme(
-          data: themeData(),
-          child: _ToolbarTheme.borderWrapper(
-              context,
-              Flex(
-                direction: innerAxis,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  spacer,
-                  ...toolbarItems,
-                  spacer,
-                ],
-              ),
-              toolbarBorderRadius),
-        ),
+    final row = Flex(
+      direction: innerAxis,
+      mainAxisSize: MainAxisSize.min,
+      children: [spacer, ...toolbarItems, spacer],
+    );
+    final toolbar = SingleChildScrollView(
+      scrollDirection: innerAxis,
+      child: Theme(
+        data: themeData(),
+        child: compact
+            ? row
+            : _ToolbarTheme.borderWrapper(context, row, toolbarBorderRadius),
       ),
     );
+    final toolbarMaterial = compact
+        ? RymuGlass(radius: 14, blur: true, child: toolbar)
+        : Material(
+            elevation: _ToolbarTheme.elevation,
+            shadowColor: MyTheme.color(context).shadow,
+            borderRadius: toolbarBorderRadius,
+            color: Theme.of(context)
+                .menuBarTheme
+                .style
+                ?.backgroundColor
+                ?.resolve(MaterialState.values.toSet()),
+            child: toolbar,
+          );
     final handle = _buildDraggableCollapse(context, edge, isHorizontal);
     // The handle hangs off the interior face of the toolbar (away from the
     // docked edge), centered along that face by the Flex's default cross-axis
@@ -904,7 +937,16 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   }
 
   ThemeData themeData() {
-    return Theme.of(context).copyWith(
+    final theme = Theme.of(context);
+    final palette = RymuGlassPalette.of(context);
+    return theme.copyWith(
+      colorScheme: compact
+          ? theme.colorScheme.copyWith(
+              primary: palette.ink,
+              onPrimary: palette.onAction,
+              surface: palette.canvas,
+              onSurface: palette.ink)
+          : null,
       menuButtonTheme: MenuButtonThemeData(
         style: ButtonStyle(
           minimumSize: MaterialStatePropertyAll(Size(64, 32)),
@@ -926,8 +968,9 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         elevation: MaterialStatePropertyAll(0),
         shape: MaterialStatePropertyAll(BeveledRectangleBorder()),
       ).copyWith(
-              backgroundColor:
-                  Theme.of(context).menuBarTheme.style?.backgroundColor)),
+              backgroundColor: compact
+                  ? const WidgetStatePropertyAll(Colors.transparent)
+                  : theme.menuBarTheme.style?.backgroundColor)),
     );
   }
 }
@@ -1061,12 +1104,14 @@ class _MonitorMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
   final _ToolbarEdge edge;
+  final bool compact;
   final Function(VoidCallback) setRemoteState;
   const _MonitorMenu({
     Key? key,
     required this.id,
     required this.ffi,
     required this.edge,
+    required this.compact,
     required this.setRemoteState,
   }) : super(key: key);
 
@@ -1090,19 +1135,21 @@ class _MonitorMenu extends StatelessWidget {
   }
 
   Widget buildMonitorMenu(BuildContext context) {
+    final palette = RymuGlassPalette.of(context);
     final width = SimpleWrapper<double>(0);
-    final monitorsIcon =
-        globalMonitorsWidget(width, Colors.white, Colors.black38);
+    final monitorsIcon = compact
+        ? _ToolbarTheme.glyph(Icons.monitor_outlined, palette.ink)
+        : globalMonitorsWidget(width, Colors.white, Colors.black38);
     return _IconSubmenuButton(
         tooltip: 'Select Monitor',
         icon: monitorsIcon,
         ffi: ffi,
-        width: width.value,
-        color: _ToolbarTheme.blueColor,
-        hoverColor: _ToolbarTheme.hoverBlueColor,
-        menuStyle: MenuStyle(
-            padding:
-                MaterialStatePropertyAll(EdgeInsets.symmetric(horizontal: 6))),
+        width: compact ? null : width.value,
+        color: compact ? Colors.transparent : _ToolbarTheme.blueColor,
+        hoverColor: compact ? palette.tint : _ToolbarTheme.hoverBlueColor,
+        menuStyle: _ToolbarTheme.defaultMenuStyle(context).copyWith(
+            padding: const MaterialStatePropertyAll(
+                EdgeInsets.symmetric(horizontal: 6))),
         menuChildrenGetter: (_) => [buildMonitorSubmenuWidget(context)]);
   }
 
@@ -1117,6 +1164,21 @@ class _MonitorMenu extends StatelessWidget {
         Row(children: buildMonitorList(context, false)),
         supportIndividualWindows ? Divider() : Offstage(),
         supportIndividualWindows ? chooseDisplayBehavior() : Offstage(),
+        if (isWindows)
+          TextButton.icon(
+              onPressed: () => showRymuDisplayMapping(context, ffi),
+              icon: const Icon(Icons.dashboard_customize_outlined),
+              label: Text(Directionality.of(context) == TextDirection.rtl
+                  ? 'توزيع الشاشات'
+                  : 'Map displays')),
+        if (isWindows && !compact)
+          TextButton.icon(
+              onPressed: () =>
+                  showRymuSessionLanguage(context, ffi.ffiModel.pi),
+              icon: const Icon(Icons.language),
+              label: Text(Directionality.of(context) == TextDirection.rtl
+                  ? 'اللغة ولوحة المفاتيح'
+                  : 'Language and keyboard')),
       ],
     );
   }
@@ -1302,9 +1364,7 @@ class _MonitorMenu extends StatelessWidget {
 class _ControlMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
-  final ToolbarState state;
-  _ControlMenu(
-      {Key? key, required this.id, required this.ffi, required this.state})
+  _ControlMenu({Key? key, required this.id, required this.ffi})
       : super(key: key);
 
   @override
@@ -1315,46 +1375,45 @@ class _ControlMenu extends StatelessWidget {
         color: _ToolbarTheme.blueColor,
         hoverColor: _ToolbarTheme.hoverBlueColor,
         ffi: ffi,
-        menuChildrenGetter: (_) => toolbarControls(context, id, ffi).map((e) {
-              if (e.divider) {
-                return Divider();
-              } else {
-                final hint = e.actionId == null
-                    ? null
-                    : ShortcutDisplay.formatFor(e.actionId!);
-                final child = hint == null
-                    ? e.child
-                    : Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(child: e.child),
-                          Flexible(
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 16),
-                              child: Text(
-                                hint,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(
-                                      color: Theme.of(context).hintColor,
-                                    ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                return MenuButton(
-                    child: child,
-                    onPressed: e.onPressed,
-                    ffi: ffi,
-                    trailingIcon: e.trailingIcon);
-              }
-            }).toList());
+        menuChildrenGetter: (_) => _controlMenuItems(context, id, ffi));
   }
 }
+
+List<Widget> _controlMenuItems(BuildContext context, String id, FFI ffi) =>
+    toolbarControls(context, id, ffi).map((e) {
+      if (e.divider) {
+        return Divider();
+      } else {
+        final hint =
+            e.actionId == null ? null : ShortcutDisplay.formatFor(e.actionId!);
+        final child = hint == null
+            ? e.child
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(child: e.child),
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 16),
+                      child: Text(
+                        hint,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).hintColor,
+                            ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+        return MenuButton(
+            child: child,
+            onPressed: e.onPressed,
+            ffi: ffi,
+            trailingIcon: e.trailingIcon);
+      }
+    }).toList();
 
 class ScreenAdjustor {
   final String id;
@@ -1715,11 +1774,13 @@ class _DisplayMenu extends StatefulWidget {
   final FFI ffi;
   final ToolbarState state;
   final Function(bool) setFullscreen;
+  final bool compact;
   const _DisplayMenu(
       {required this.id,
       required this.ffi,
       required this.state,
-      required this.setFullscreen});
+      required this.setFullscreen,
+      required this.compact});
 
   @override
   State<_DisplayMenu> createState() => _DisplayMenuState();
@@ -1757,7 +1818,7 @@ class _DisplayMenuState extends State<_DisplayMenu> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    menuChildrenGetter(_IconSubmenuButtonState state) {
+    List<Widget> displayOptions(_IconSubmenuButtonState state) {
       final menuChildren = <Widget>[
         _screenAdjustor.adjustWindow(context),
         viewStyle(customPercent: _customPercent),
@@ -1812,13 +1873,49 @@ class _DisplayMenuState extends State<_DisplayMenu> {
       return menuChildren;
     }
 
+    final compact = widget.compact;
+    final palette = RymuGlassPalette.of(context);
     return _IconSubmenuButton(
-      tooltip: 'Display Settings',
-      svg: "assets/display.svg",
+      tooltip: compact ? 'Settings' : 'Display Settings',
+      svg: compact ? null : 'assets/display.svg',
+      icon:
+          compact ? _ToolbarTheme.glyph(Icons.tune_rounded, palette.ink) : null,
       ffi: widget.ffi,
-      color: _ToolbarTheme.blueColor,
-      hoverColor: _ToolbarTheme.hoverBlueColor,
-      menuChildrenGetter: menuChildrenGetter,
+      color: compact ? Colors.transparent : _ToolbarTheme.blueColor,
+      hoverColor: compact ? palette.tint : _ToolbarTheme.hoverBlueColor,
+      menuChildrenGetter: compact
+          ? (state) => [
+                _SubmenuButton(
+                  ffi: ffi,
+                  child: Text(translate('Display Settings')),
+                  menuChildren: displayOptions(state),
+                ),
+                _SubmenuButton(
+                  ffi: ffi,
+                  child: Text(translate('Control Actions')),
+                  menuChildren: _controlMenuItems(context, id, ffi),
+                ),
+                MenuButton(
+                  ffi: ffi,
+                  child: Text(Directionality.of(context) == TextDirection.rtl
+                      ? 'اللغة ولوحة المفاتيح'
+                      : 'Language and keyboard'),
+                  onPressed: () => showRymuSessionLanguage(context, pi),
+                ),
+                MenuButton(
+                  ffi: ffi,
+                  child: Text(translate('Text chat')),
+                  onPressed: () => _toggleTextChat(ffi),
+                ),
+                const Divider(),
+                Obx(() => CkbMenuButton(
+                      ffi: ffi,
+                      value: widget.state.pin,
+                      onChanged: (_) => widget.state.switchPin(),
+                      child: Text(translate('Pin Toolbar')),
+                    )),
+              ]
+          : displayOptions,
     );
   }
 
@@ -2547,10 +2644,12 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
 class _KeyboardMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
+  final bool compact;
   _KeyboardMenu({
     Key? key,
     required this.id,
     required this.ffi,
+    this.compact = false,
   }) : super(key: key);
 
   PeerInfo get pi => ffi.ffiModel.pi;
@@ -2575,10 +2674,16 @@ class _KeyboardMenu extends StatelessWidget {
 
     return _IconSubmenuButton(
         tooltip: 'Keyboard Settings',
-        svg: "assets/keyboard_mouse.svg",
+        svg: compact ? null : 'assets/keyboard_mouse.svg',
+        icon: compact
+            ? _ToolbarTheme.glyph(
+                Icons.keyboard_outlined, RymuGlassPalette.of(context).ink)
+            : null,
         ffi: ffi,
-        color: _ToolbarTheme.blueColor,
-        hoverColor: _ToolbarTheme.hoverBlueColor,
+        color: compact ? Colors.transparent : _ToolbarTheme.blueColor,
+        hoverColor: compact
+            ? RymuGlassPalette.of(context).tint
+            : _ToolbarTheme.hoverBlueColor,
         menuChildrenGetter: (_) => [
               keyboardMode(),
               localKeyboardType(),
@@ -2876,9 +2981,7 @@ class _ChatMenuState extends State<_ChatMenu> {
       final pos = renderBox.localToGlobal(Offset.zero);
       initPos = Offset(pos.dx, pos.dy + _ToolbarTheme.dividerHeight);
     }
-    widget.ffi.chatModel
-        .changeCurrentKey(MessageKey(widget.ffi.id, ChatModel.clientModeID));
-    widget.ffi.chatModel.toggleChatOverlay(chatInitPos: initPos);
+    _toggleTextChat(widget.ffi, initPos: initPos);
   }
 
   voiceCall() {
@@ -2889,6 +2992,11 @@ class _ChatMenuState extends State<_ChatMenu> {
           bind.sessionRequestVoiceCall(sessionId: widget.ffi.sessionId),
     );
   }
+}
+
+void _toggleTextChat(FFI ffi, {Offset? initPos}) {
+  ffi.chatModel.changeCurrentKey(MessageKey(ffi.id, ChatModel.clientModeID));
+  ffi.chatModel.toggleChatOverlay(chatInitPos: initPos);
 }
 
 class _VoiceCallMenu extends StatelessWidget {
@@ -3002,24 +3110,35 @@ class _RecordMenu extends StatelessWidget {
 class _CloseMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
-  const _CloseMenu({Key? key, required this.id, required this.ffi})
-      : super(key: key);
+  final bool compact;
+  const _CloseMenu({
+    Key? key,
+    required this.id,
+    required this.ffi,
+    required this.compact,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    final palette = RymuGlassPalette.of(context);
     return _IconMenuButton(
-      assetName: 'assets/close.svg',
-      tooltip: 'Close',
-      onPressed: () async {
-        if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) {
-          return;
-        }
-        closeConnection(id: id);
-      },
-      color: _ToolbarTheme.redColor,
-      hoverColor: _ToolbarTheme.hoverRedColor,
+      assetName: compact ? null : 'assets/close.svg',
+      icon: compact
+          ? _ToolbarTheme.glyph(Icons.link_off_rounded, palette.onAction)
+          : null,
+      tooltip: compact ? 'Disconnect' : 'Close',
+      onPressed: () => _disconnectSession(ffi, id),
+      color: compact ? palette.action : _ToolbarTheme.redColor,
+      hoverColor: compact
+          ? palette.action.withOpacity(0.82)
+          : _ToolbarTheme.hoverRedColor,
     );
   }
+}
+
+Future<void> _disconnectSession(FFI ffi, String id) async {
+  if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) return;
+  closeConnection(id: id);
 }
 
 class _IconMenuButton extends StatefulWidget {
@@ -3322,6 +3441,7 @@ class _DraggableShowHide extends StatefulWidget {
   final RxBool dragging;
   final ToolbarState toolbarState;
   final BorderRadius borderRadius;
+  final bool compact;
 
   final Function(bool) setFullscreen;
   final Function() setMinimize;
@@ -3345,6 +3465,7 @@ class _DraggableShowHide extends StatefulWidget {
     required this.setFullscreen,
     required this.setMinimize,
     required this.borderRadius,
+    required this.compact,
   }) : super(key: key);
 
   @override
@@ -3360,6 +3481,8 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
   Size? _dragToolbarSize;
 
   RxBool get collapse => widget.toolbarState.collapse;
+  bool get isCollapsed =>
+      collapse.isTrue || (widget.compact && widget.toolbarState.hide.isTrue);
 
   @override
   initState() {
@@ -3531,7 +3654,9 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
         child: Icon(
           widget.isHorizontal ? Icons.drag_indicator : Icons.drag_handle,
           size: 20,
-          color: MyTheme.color(context).drag_indicator,
+          color: widget.compact
+              ? RymuGlassPalette.of(context).muted
+              : MyTheme.color(context).drag_indicator,
         ),
         feedback: widget,
         onDragStarted: () {
@@ -3556,23 +3681,30 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = RymuGlassPalette.of(context);
     final ButtonStyle buttonStyle = ButtonStyle(
-      minimumSize: MaterialStateProperty.all(const Size(0, 0)),
-      padding: MaterialStateProperty.all(EdgeInsets.zero),
+      minimumSize: WidgetStateProperty.all(
+          widget.compact ? const Size(28, 28) : const Size(0, 0)),
+      padding: WidgetStateProperty.all(EdgeInsets.zero),
+      tapTargetSize: widget.compact ? MaterialTapTargetSize.shrinkWrap : null,
+      foregroundColor:
+          widget.compact ? WidgetStatePropertyAll(palette.ink) : null,
     );
     final isFullscreen = stateGlobal.fullscreen;
     const double iconSize = 20;
 
-    buttonWrapper(VoidCallback? onPressed, Widget child,
-        {Color hoverColor = _ToolbarTheme.blueColor}) {
+    buttonWrapper(VoidCallback? onPressed, Widget child, {Color? hoverColor}) {
       final bgColor = buttonStyle.backgroundColor?.resolve({});
       return TextButton(
         onPressed: onPressed,
         child: child,
         style: buttonStyle.copyWith(
-          backgroundColor: MaterialStateProperty.resolveWith((states) {
-            if (states.contains(MaterialState.hovered)) {
-              return (bgColor ?? hoverColor).withOpacity(0.15);
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.hovered)) {
+              return widget.compact
+                  ? palette.tint
+                  : (bgColor ?? hoverColor ?? _ToolbarTheme.blueColor)
+                      .withOpacity(0.15);
             }
             return bgColor;
           }),
@@ -3586,7 +3718,7 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
       mainAxisSize: MainAxisSize.min,
       children: [
         _buildDraggable(context),
-        Obx(() => collapse.isTrue
+        Obx(() => isCollapsed
             ? _MinimizedMonitorSwitchButton(id: widget.id, ffi: widget.ffi)
             : const Offstage()),
         Obx(() => buttonWrapper(
@@ -3619,60 +3751,69 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
                 ),
               )),
         buttonWrapper(
-          () => setState(() {
-            widget.toolbarState.switchCollapse(widget.sessionId);
-          }),
+          () async {
+            if (widget.compact && widget.toolbarState.hide.isTrue) {
+              await widget.toolbarState.switchHide(widget.sessionId);
+              if (!collapse.isTrue) return;
+            }
+            await widget.toolbarState.switchCollapse(widget.sessionId);
+          },
           Obx((() => Tooltip(
-                message: translate(
-                    collapse.isFalse ? 'Hide Toolbar' : 'Show Toolbar'),
+                message:
+                    translate(isCollapsed ? 'Show Toolbar' : 'Hide Toolbar'),
                 child: Icon(
-                  _toolbarCollapseIcon(widget.edge.value, collapse.isTrue),
+                  _toolbarCollapseIcon(widget.edge.value, isCollapsed),
                   size: iconSize,
                 ),
               ))),
         ),
-        if (isWebDesktop)
+        if (isWebDesktop || widget.compact)
           Obx(() {
-            if (collapse.isFalse) {
+            if (!isCollapsed) {
               return Offstage();
             } else {
               return buttonWrapper(
-                () => closeConnection(id: widget.id),
+                widget.compact
+                    ? () => _disconnectSession(widget.ffi, widget.id)
+                    : () => closeConnection(id: widget.id),
                 Tooltip(
-                  message: translate('Close'),
+                  message: translate(widget.compact ? 'Disconnect' : 'Close'),
                   child: Icon(
-                    Icons.close,
+                    widget.compact ? Icons.link_off_rounded : Icons.close,
                     size: iconSize,
-                    color: _ToolbarTheme.redColor,
+                    color:
+                        widget.compact ? palette.ink : _ToolbarTheme.redColor,
                   ),
                 ),
                 hoverColor: _ToolbarTheme.redColor,
-              ).paddingOnly(left: iconSize / 2);
+              ).paddingOnly(left: widget.compact ? 0 : iconSize / 2);
             }
           })
       ],
     );
     return TextButtonTheme(
       data: TextButtonThemeData(style: buttonStyle),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context)
-              .menuBarTheme
-              .style
-              ?.backgroundColor
-              ?.resolve(MaterialState.values.toSet()),
-          border: Border.all(
-            color: _ToolbarTheme.borderColor(context),
-            width: 1,
-          ),
-          borderRadius: widget.borderRadius,
-        ),
-        child: SizedBox(
-          height: widget.isHorizontal ? 20 : null,
-          width: widget.isHorizontal ? null : 20,
-          child: child,
-        ),
-      ),
+      child: widget.compact
+          ? child
+          : Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context)
+                    .menuBarTheme
+                    .style
+                    ?.backgroundColor
+                    ?.resolve(MaterialState.values.toSet()),
+                border: Border.all(
+                  color: _ToolbarTheme.borderColor(context),
+                  width: 1,
+                ),
+                borderRadius: widget.borderRadius,
+              ),
+              child: SizedBox(
+                height: widget.isHorizontal ? 20 : null,
+                width: widget.isHorizontal ? null : 20,
+                child: child,
+              ),
+            ),
     );
   }
 }

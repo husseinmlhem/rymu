@@ -103,6 +103,10 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  rymu_packaged_startup_ = std::make_unique<RymuPackagedStartup>(
+      flutter_controller_->engine()->messenger());
+  rymu_tray_ = std::make_unique<RymuTray>(
+      GetHandle(), flutter_controller_->engine()->messenger());
 
   flutter::MethodChannel<> channel(
     flutter_controller_->engine()->messenger(),
@@ -166,6 +170,8 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   KillTimer(GetHandle(), kForceRedrawTimerId);
+  rymu_tray_.reset();
+  rymu_packaged_startup_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -177,6 +183,10 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (rymu_tray_) {
+    const auto handled = rymu_tray_->HandleMessage(message, wparam, lparam);
+    if (handled) return *handled;
+  }
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

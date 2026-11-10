@@ -29,6 +29,9 @@ import 'package:flutter_hbb/models/terminal_model.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
+import 'package:flutter_hbb/rymu/display_mapping.dart';
+import 'package:flutter_hbb/rymu/session_language.dart';
+import 'package:flutter_hbb/rymu_android/monitor_overview.dart';
 import 'package:tuple/tuple.dart';
 import 'package:image/image.dart' as img2;
 import 'package:flutter_svg/flutter_svg.dart';
@@ -121,6 +124,25 @@ class FfiModel with ChangeNotifier {
   Timer? _timer;
   Timer? _restartReconnectDelayTimer;
   var _reconnects = 1;
+  Future<bool> Function()? _rymuRestage;
+  bool _rymuRestaging = false;
+  bool _rymuReconnectStopped = false;
+  int _rymuReconnectAttempts = 0;
+  VoidCallback? onRymuPrivacyUpdate;
+
+  /// Set by an account-authorized viewer. Closing the viewer cancels any retry
+  /// and prevents a completed restaging request from restarting its session.
+  void setRymuReconnectHandler(Future<bool> Function()? handler) {
+    _timer?.cancel();
+    _timer = null;
+    resetRestartReconnectState();
+    _rymuReconnectStopped = handler == null &&
+        (_rymuRestage != null || _rymuReconnectStopped);
+    _rymuRestage = handler;
+    _rymuRestaging = false;
+    _rymuReconnectAttempts = 0;
+    _reconnects = 1;
+  }
   DateTime? _offlineReconnectStartTime;
   bool _androidDocumentPickerActive = false;
   bool _androidDocumentPickerInterruptedConnection = false;
@@ -927,6 +949,10 @@ class FfiModel with ChangeNotifier {
       enterUserLoginAndPasswordDialog(
           sessionId, dialogManager, 'terminal-admin-login-tip');
     } else if (type == 'restarting') {
+      if (_rymuRestage != null || _rymuReconnectStopped) {
+        reconnect(dialogManager, sessionId, false);
+        return;
+      }
       // Treat restart messages as reconnect control events. Rust still sends
       // title/text for legacy UI and translation reuse; Flutter keeps the last
       // frame briefly, then shows the Connecting overlay.
@@ -1064,6 +1090,10 @@ class FfiModel with ChangeNotifier {
   showMsgBox(SessionID sessionId, String type, String title, String text,
       String link, bool hasRetry, OverlayDialogManager dialogManager,
       {bool? hasCancel}) async {
+    if (_rymuReconnectStopped ||
+        (_rymuRestage != null && _rymuReconnectAttempts >= 3)) {
+      hasRetry = false;
+    }
     final noteAllowed = parent.target != null &&
         allowAskForNoteAtEndOfConnection(parent.target, false) &&
         (title == "Connection Error" || type == "restarting");
@@ -1113,8 +1143,37 @@ class FfiModel with ChangeNotifier {
     _pendingRestoreTimer = null;
   }
 
-  void reconnect(OverlayDialogManager dialogManager, SessionID sessionId,
-      bool forceRelay) {
+  Future<void> reconnect(OverlayDialogManager dialogManager, SessionID sessionId,
+      bool forceRelay) async {
+    if (_rymuReconnectStopped) return;
+    final restage = _rymuRestage;
+    if (restage != null) {
+      if (_rymuRestaging || _rymuReconnectAttempts >= 3) return;
+      _timer?.cancel();
+      _timer = null;
+      _rymuRestaging = true;
+      _rymuReconnectAttempts++;
+      try {
+        final authorized = await restage();
+        if (_rymuRestage != restage) return;
+        if (!authorized) {
+          _rymuReconnectStopped = true;
+          dialogManager.dismissAll();
+          showMsgBox(sessionId, 'error', 'Connection Error',
+              'Rymu could not reauthorize this device.', '', false, dialogManager);
+          return;
+        }
+      } catch (_) {
+        if (_rymuRestage == restage) {
+          dialogManager.dismissAll();
+          showMsgBox(sessionId, 'error', 'Connection Error',
+              'The Rymu account service is unavailable.', '', true, dialogManager);
+        }
+        return;
+      } finally {
+        if (_rymuRestage == restage) _rymuRestaging = false;
+      }
+    }
     // Disable relative mouse mode before reconnecting to ensure cursor is released.
     parent.target?.inputModel.setRelativeMouseMode(false);
     _cancelPendingMonitorRestore();
@@ -1452,6 +1511,7 @@ class FfiModel with ChangeNotifier {
       }
       if (displays.isNotEmpty) {
         _reconnects = 1;
+        if (!isCache) _rymuReconnectAttempts = 0;
         _offlineReconnectStartTime = null;
         resetRestartReconnectState();
         waitForFirstImage.value = true;
@@ -1497,11 +1557,22 @@ class FfiModel with ChangeNotifier {
     notifyListeners();
 
     if (!isCache) {
-      tryUseAllMyDisplaysForTheRemoteSession(peerId);
+      final session = parent.target;
+      if (isWindows && session != null) {
+        unawaited(applyRymuSessionLanguage(_pi));
+        unawaited(restoreRymuDisplayMapping(session));
+      } else {
+        tryUseAllMyDisplaysForTheRemoteSession(peerId);
+      }
     }
   }
 
   checkDesktopKeyboardMode() async {
+    if (isWindows &&
+        bind.sessionIsKeyboardModeSupported(sessionId: sessionId, mode: kKeyMapMode)) {
+      await bind.sessionSetKeyboardMode(sessionId: sessionId, value: kKeyMapMode);
+      return;
+    }
     if (isInputSourceFlutter) {
       // Local side, flutter keyboard input source
       // Currently only map mode is supported, legacy mode is used for compatibility.
@@ -1804,9 +1875,20 @@ class FfiModel with ChangeNotifier {
     try {
       final isOn = bind.sessionGetToggleOptionSync(
           sessionId: sessionId, arg: 'privacy-mode');
+      final rymuUpdate = onRymuPrivacyUpdate;
+      if (rymuUpdate != null) {
+        if (isOn) setRymuReconnectHandler(null);
+        PrivacyModeState.find(peerId).value =
+            isOn ? 'rymu_privacy_overlay' : '';
+        rymuUpdate();
+        return;
+      }
       if (isOn) {
         var privacyModeImpl = await bind.sessionGetOption(
             sessionId: sessionId, arg: 'privacy-mode-impl-key');
+        if (privacyModeImpl == 'rymu_privacy_overlay') {
+          setRymuReconnectHandler(null);
+        }
         // For compatibility, version < 1.2.4, the default value is 'privacy_mode_impl_mag'.
         final initDefaultPrivacyMode = 'privacy_mode_impl_mag';
         PrivacyModeState.find(peerId).value =
@@ -1916,6 +1998,7 @@ class VirtualMouseMode with ChangeNotifier {
 
 class ImageModel with ChangeNotifier {
   ui.Image? _image;
+  RymuMonitorOverview? rymuOverview;
 
   ui.Image? get image => _image;
 
@@ -1977,6 +2060,7 @@ class ImageModel with ChangeNotifier {
 
   decodeAndUpdate(int display, Uint8List rgba) async {
     final pid = parent.target?.id;
+    final overview = rymuOverview;
     final rect = parent.target?.ffiModel.pi.getDisplayRect(display);
     final image = await img.decodeImageFromPixels(
       rgba,
@@ -1986,8 +2070,14 @@ class ImageModel with ChangeNotifier {
           ? ui.PixelFormat.rgba8888
           : ui.PixelFormat.bgra8888,
     );
-    if (parent.target?.id != pid) {
+    if (parent.target?.id != pid || !identical(overview, rymuOverview)) {
       image?.dispose();
+      return;
+    }
+    if (overview != null) {
+      if (image != null) {
+        overview.updateFrame(display, image);
+      }
       return;
     }
     await update(image);
@@ -2051,6 +2141,7 @@ class ImageModel with ChangeNotifier {
   }
 
   void disposeImage() {
+    rymuOverview?.clearFrames();
     _image?.dispose();
     _image = null;
   }
@@ -2245,6 +2336,8 @@ class CanvasModel with ChangeNotifier {
   bool _locked = false;
   double _devicePixelRatio = 1.0;
   Size _size = Size.zero;
+  // Rymu's mobile body has already excluded system insets and its controls.
+  Size? rymuMobileViewport;
   // the tabbar over the image
   // double tabBarHeight = 0.0;
   // the window border's width
@@ -2336,6 +2429,8 @@ class CanvasModel with ChangeNotifier {
       isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.bottom : 0;
 
   Size getSize() {
+    final viewport = rymuMobileViewport;
+    if (viewport != null) return viewport;
     final mediaData = MediaQueryData.fromView(ui.window);
     final size = mediaData.size;
     // If minimized, w or h may be negative here.
@@ -2349,7 +2444,8 @@ class CanvasModel with ChangeNotifier {
       h = h -
           mediaData.viewInsets.bottom -
           (parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ??
-              0);
+              0) -
+          (parent.target?.cursorModel.mobileKeyboardDockHeight ?? 0);
       // Orientation-specific handling:
       //  - Portrait: additionally subtract top padding (e.g. status bar / notch)
       //  - Landscape: does not subtract mediaData.padding.top/bottom (home indicator auto-hides)
@@ -2374,6 +2470,7 @@ class CanvasModel with ChangeNotifier {
 
   // mobile only
   double getAdjustY() {
+    if (rymuMobileViewport != null) return 0;
     final bottom =
         parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ?? 0;
     return max(bottom - MediaQueryData.fromView(ui.window).padding.top, 0);
@@ -2382,6 +2479,10 @@ class CanvasModel with ChangeNotifier {
   updateSize() => _size = getSize();
 
   updateViewStyle({refreshMousePos = true, notify = true}) async {
+    if (rymuMobileViewport != null) {
+      fitRymuMobileViewport(notify: notify);
+      return;
+    }
     final style = await bind.sessionGetViewStyle(sessionId: sessionId);
     if (style == null) {
       return;
@@ -2447,6 +2548,62 @@ class CanvasModel with ChangeNotifier {
     tryUpdateScrollStyle(Duration.zero, style);
   }
 
+  void fitRymuMobileViewport({bool force = false, bool notify = true}) {
+    final viewport = rymuMobileViewport;
+    if (viewport == null || viewport.isEmpty) return;
+    final style = ViewStyle(
+      style: kRemoteViewStyleAdaptive,
+      width: viewport.width,
+      height: viewport.height,
+      displayWidth: getDisplayWidth(),
+      displayHeight: getDisplayHeight(),
+    );
+    if (style.displayWidth <= 0 || style.displayHeight <= 0) return;
+    if (!force && _lastViewStyle == style) return;
+    _size = viewport;
+    _lastViewStyle = style;
+    _devicePixelRatio =
+        ui.PlatformDispatcher.instance.implicitView?.devicePixelRatio ?? 1;
+    _scale = style.scale;
+    _setRymuMobileOffset(Offset.zero);
+    if (notify) notifyListeners();
+  }
+
+  void transformRymuMobileViewport(
+      double multiplier, Offset previousFocal, Offset focal) {
+    if (rymuMobileViewport == null ||
+        _size.isEmpty ||
+        _locked ||
+        !multiplier.isFinite ||
+        multiplier <= 0) {
+      return;
+    }
+    final fit = _lastViewStyle.scale;
+    final maximum = max(
+        1.5,
+        max(_size.width / _lastViewStyle.displayWidth,
+            _size.height / _lastViewStyle.displayHeight));
+    final next = (_scale * multiplier).clamp(fit, maximum).toDouble();
+    final offset = focal - (previousFocal - Offset(_x, _y)) * (next / _scale);
+    _scale = next;
+    _setRymuMobileOffset(offset);
+    notifyListeners();
+  }
+
+  void _setRymuMobileOffset(Offset offset) {
+    _x = _boundedRymuAxis(
+        offset.dx, _size.width, _lastViewStyle.displayWidth * _scale);
+    _y = _boundedRymuAxis(
+        offset.dy, _size.height, _lastViewStyle.displayHeight * _scale);
+    final overflow = _x < 0 || _y < 0;
+    if (_imageOverflow.value != overflow) _imageOverflow.value = overflow;
+  }
+
+  double _boundedRymuAxis(double offset, double viewport, double content) {
+    final space = viewport - content;
+    return space >= 0 ? space / 2 : offset.clamp(space, 0.0).toDouble();
+  }
+
   _resetCanvasOffset(int displayWidth, int displayHeight) {
     _x = (size.width - displayWidth * _scale) / 2;
     _y = (size.height - displayHeight * _scale) / 2;
@@ -2500,6 +2657,10 @@ class CanvasModel with ChangeNotifier {
   }
 
   void update(double x, double y, double scale) {
+    if (rymuMobileViewport != null) {
+      fitRymuMobileViewport(force: true);
+      return;
+    }
     _x = x;
     _y = y;
     _scale = scale;
@@ -2577,9 +2738,13 @@ class CanvasModel with ChangeNotifier {
       return;
     }
 
-    _x += dxOffset;
-    _y += dyOffset;
     if (dxOffset != 0 || dyOffset != 0) {
+      if (rymuMobileViewport != null) {
+        _setRymuMobileOffset(Offset(_x + dxOffset, _y + dyOffset));
+      } else {
+        _x += dxOffset;
+        _y += dyOffset;
+      }
       notifyListeners();
     }
   }
@@ -2716,6 +2881,10 @@ class CanvasModel with ChangeNotifier {
   }
 
   resetOffset() {
+    if (rymuMobileViewport != null) {
+      fitRymuMobileViewport(force: true);
+      return;
+    }
     if (isWebDesktop) {
       updateViewStyle();
     } else {
@@ -2756,6 +2925,10 @@ class CanvasModel with ChangeNotifier {
 
   // For reset canvas to the last view style
   reset() {
+    if (rymuMobileViewport != null) {
+      fitRymuMobileViewport(force: true);
+      return;
+    }
     _scale = _lastViewStyle.scale;
     _devicePixelRatio = ui.window.devicePixelRatio;
     if (kIgnoreDpi && _lastViewStyle.style == kRemoteViewStyleOriginal) {
@@ -2769,6 +2942,7 @@ class CanvasModel with ChangeNotifier {
   clear() {
     _x = 0;
     _y = 0;
+    rymuMobileViewport = null;
     _scale = 1.0;
     _locked = false;
     _lastViewStyle = ViewStyle.defaultViewStyle();
@@ -3131,8 +3305,10 @@ class CursorModel with ChangeNotifier {
   // Because onDoubleTap() doesn't have the `event` parameter, we can't get the touch event's position.
   bool _lastIsBlocked = false;
   bool _lastKeyboardIsVisible = false;
+  double _mobileKeyboardDockHeight = 0;
 
   bool get lastKeyboardIsVisible => _lastKeyboardIsVisible;
+  double get mobileKeyboardDockHeight => _mobileKeyboardDockHeight;
 
   Rect? get keyHelpToolsRectToAdjustCanvas =>
       _lastKeyboardIsVisible ? _keyHelpToolsRect : null;
@@ -3152,7 +3328,9 @@ class CursorModel with ChangeNotifier {
 
   set blockEvents(bool v) => _blockEvents = v;
 
-  keyHelpToolsVisibilityChanged(Rect? rect, bool keyboardIsVisible) {
+  keyHelpToolsVisibilityChanged(Rect? rect, bool keyboardIsVisible,
+      {double dockHeight = 0}) {
+    _mobileKeyboardDockHeight = dockHeight;
     _keyHelpToolsRect = rect;
     if (rect == null) {
       _lastIsBlocked = false;
@@ -3365,8 +3543,12 @@ class CursorModel with ChangeNotifier {
     }
     double dx = delta.dx;
     double dy = delta.dy;
-    if (parent.target?.imageModel.image == null) return;
-    final scale = parent.target?.canvasModel.scale ?? 1.0;
+    final canvas = parent.target?.canvasModel;
+    if (canvas?.rymuMobileViewport == null &&
+        parent.target?.imageModel.image == null) {
+      return;
+    }
+    final scale = canvas?.scale ?? 1.0;
     dx /= scale;
     dy /= scale;
     final r = getVisibleRect();
@@ -3442,11 +3624,17 @@ class CursorModel with ChangeNotifier {
     dy = newPos.y - _y;
     _x = newPos.x;
     _y = newPos.y;
-    if (tryMoveCanvasX && dx != 0) {
-      parent.target?.canvasModel.panX(-dx * scale);
-    }
-    if (tryMoveCanvasY && dy != 0) {
-      parent.target?.canvasModel.panY(-dy * scale);
+    if (canvas?.rymuMobileViewport != null) {
+      final shift = Offset(
+        tryMoveCanvasX ? -dx * scale : 0,
+        tryMoveCanvasY ? -dy * scale : 0,
+      );
+      if (shift != Offset.zero) {
+        canvas!.transformRymuMobileViewport(1, Offset.zero, shift);
+      }
+    } else {
+      if (tryMoveCanvasX && dx != 0) canvas?.panX(-dx * scale);
+      if (tryMoveCanvasY && dy != 0) canvas?.panY(-dy * scale);
     }
 
     parent.target?.inputModel.moveMouse(_x, _y);

@@ -1,0 +1,486 @@
+{
+  "recorded_at_utc": "2026-11-05T22:57:52+00:00",
+  "scope": "Source, locked dependencies and feature graphs for Windows x64 and Android arm64 owner-test builds",
+  "rust_toolchain": "1.75.0",
+  "cargo_lock_sha256": "3c825ab1b4240bbf8f198c39149affe01a5954382cc47adde2b8f8a18d40a595",
+  "engine_policy_file_sha256": {
+    "src/common.rs": "b6e747b208961fb4431f4cbb9f92e9353ebd105b8cc2cc18e1cafdf2c87219ee",
+    "src/client.rs": "e871bf2feef78a7e952eedc5f3b85c1c9981b789d6b1c690feaaed3c9af69067",
+    "src/rendezvous_mediator.rs": "2e70db7a5cce6bb2b20f3c70c15ad2469ab7240d613dee534e3824a400899b23",
+    "src/server.rs": "e91385a5ba290d29711dcedcd44607073f0ca5cb19f94b4c2a9f9483d4f4d334",
+    "src/rymu.rs": "d7f4a5b03d3c60a0f3f1c74440f1ae8fbc9ca5d9ccd4afddd04fa86d96f1b887"
+  },
+  "rustsec": {
+    "cargo_audit_version": "0.22.2",
+    "database_commit": "26fd2d43f7280a1fb925a3743ec463017afe7119",
+    "database_source": "https://github.com/RustSec/advisory-db",
+    "locked_entries": 1033,
+    "vulnerability_matches_before": 28,
+    "vulnerability_matches_after": 18,
+    "warning_counts_after": {
+      "unmaintained": 24,
+      "unsound": 12
+    },
+    "yanked_version_check": "omitted",
+    "target_feature_graphs": {
+      "x86_64-pc-windows-msvc": "hwcodec,vram,flutter",
+      "aarch64-linux-android": "flutter,hwcodec"
+    },
+    "lock_changes": [
+      {
+        "filename": "crossbeam-channel-0.5.15.crate",
+        "bytes": 92716,
+        "sha256": "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2",
+        "source": "https://static.crates.io/crates/crossbeam-channel/crossbeam-channel-0.5.15.crate"
+      },
+      {
+        "filename": "libz-sys-1.1.31.crate",
+        "bytes": 888048,
+        "sha256": "ff20308ecabd635a2dc1dd5834a86c462cca20efba1d5d3ddab1f8aea3455cb2",
+        "source": "https://static.crates.io/crates/libz-sys/libz-sys-1.1.31.crate"
+      },
+      {
+        "filename": "openssl-0.10.78.crate",
+        "bytes": 292622,
+        "sha256": "f38c4372413cdaaf3cc79dd92d29d7d9f5ab09b51b10dded508fb90bb70b9222",
+        "source": "https://static.crates.io/crates/openssl/openssl-0.10.78.crate"
+      },
+      {
+        "filename": "openssl-sys-0.9.114.crate",
+        "bytes": 75617,
+        "sha256": "13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6",
+        "source": "https://static.crates.io/crates/openssl-sys/openssl-sys-0.9.114.crate"
+      },
+      {
+        "filename": "rustls-0.23.46.crate",
+        "bytes": 386227,
+        "sha256": "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf",
+        "source": "https://static.crates.io/crates/rustls/rustls-0.23.46.crate"
+      },
+      {
+        "filename": "zstd-safe-7.4.0.crate",
+        "bytes": 41926,
+        "sha256": "1c8ea04668f5de8d8d51051714ba560c9536519cadcdb8829bba4fe2ad159b03",
+        "source": "https://static.crates.io/crates/zstd-safe/zstd-safe-7.4.0.crate"
+      },
+      {
+        "filename": "zstd-sys-2.1.2+zstd.1.5.7.crate",
+        "bytes": 785774,
+        "sha256": "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3",
+        "source": "https://static.crates.io/crates/zstd-sys/zstd-sys-2.1.2%2Bzstd.1.5.7.crate"
+      }
+    ],
+    "remaining_vulnerability_matches": [
+      {
+        "id": "RUSTSEC-2026-0387",
+        "package": "crypto-bigint",
+        "version": "0.5.5",
+        "patched_requirements": [
+          ">=0.7.6"
+        ],
+        "cvss_vector": null,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0387.html",
+        "status": "runtime_mitigated",
+        "compiled_in_target_graph": {
+          "windows_x64": true,
+          "android_arm64": true
+        },
+        "reason": "WebRTC DTLS ephemeral P-256 scalar sampling can reach crypto-bigint subtraction through constant-time comparison. The fork now statically disables outbound WebRTC, clears incoming SDP offers, and pins raw relay dial targets to the validated configured route. The managed WSS and manual TCP paths continue independently. Crypto-bigint stays in the dependency graph.",
+        "evidence": [
+          "apps/native/src/common.rs:1335",
+          "apps/native/src/rendezvous_mediator.rs:1033",
+          "apps/native/src/server.rs:407",
+          "apps/native/src/client.rs:1835",
+          "apps/native/src/rymu.rs:143"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2024-0421",
+        "package": "idna",
+        "version": "0.5.0",
+        "patched_requirements": [
+          ">=1.0.0"
+        ],
+        "cvss_vector": null,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2024-0421.html",
+        "status": "affected_condition_not_found",
+        "compiled_in_target_graph": {
+          "windows_x64": true,
+          "android_arm64": true
+        },
+        "reason": "The compiled url crate normalizes manual ASCII endpoint hostnames before the RustDesk domain deny check. The hosted default uses an ASCII account origin and derives its WSS URL from the same URL parser. No privilege comparison between mixed IDNA implementations was found on those reviewed paths.",
+        "evidence": [
+          "apps/native/src/rymu.rs:143",
+          "apps/native/src/rymu/relay.rs:39",
+          "apps/native/flutter/lib/rymu/windows_account.dart:75",
+          "apps/native/flutter/lib/rymu_android/account.dart:17"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2024-0013",
+        "package": "libgit2-sys",
+        "version": "0.14.2+1.5.1",
+        "patched_requirements": [
+          ">=0.16.2"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2024-0013.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "The libgit2 dependency appears in the all-target lockfile. The inspected Windows and Android engine graphs exclude it.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0194",
+        "package": "quick-xml",
+        "version": "0.30.0",
+        "patched_requirements": [
+          ">=0.41.0"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0194.html",
+        "status": "affected_parser_not_called",
+        "compiled_in_target_graph": {
+          "windows_x64": true,
+          "android_arm64": false
+        },
+        "reason": "Windows tauri-winrt-notification uses quick-xml for escaping text when creating local toast XML. The identified attribute iterator and namespace parser APIs are outside that call path.",
+        "evidence": [
+          "https://docs.rs/crate/tauri-winrt-notification/0.1.3/source/src/lib.rs",
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0195",
+        "package": "quick-xml",
+        "version": "0.30.0",
+        "patched_requirements": [
+          ">=0.41.0"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0195.html",
+        "status": "affected_parser_not_called",
+        "compiled_in_target_graph": {
+          "windows_x64": true,
+          "android_arm64": false
+        },
+        "reason": "Windows tauri-winrt-notification uses quick-xml for escaping text when creating local toast XML. The identified attribute iterator and namespace parser APIs are outside that call path.",
+        "evidence": [
+          "https://docs.rs/crate/tauri-winrt-notification/0.1.3/source/src/lib.rs",
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0194",
+        "package": "quick-xml",
+        "version": "0.31.0",
+        "patched_requirements": [
+          ">=0.41.0"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0194.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "Both inspected engine graphs exclude the plist XML parser.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0195",
+        "package": "quick-xml",
+        "version": "0.31.0",
+        "patched_requirements": [
+          ">=0.41.0"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0195.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "Both inspected engine graphs exclude the plist XML parser.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0194",
+        "package": "quick-xml",
+        "version": "0.37.5",
+        "patched_requirements": [
+          ">=0.41.0"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0194.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "Both inspected engine graphs exclude the Wayland XML parser.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0195",
+        "package": "quick-xml",
+        "version": "0.37.5",
+        "patched_requirements": [
+          ">=0.41.0"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0195.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "Both inspected engine graphs exclude the Wayland XML parser.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0338",
+        "package": "quinn-proto",
+        "version": "0.11.15",
+        "patched_requirements": [
+          ">=0.11.18"
+        ],
+        "cvss_vector": null,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0338.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "The Windows and Android engine graphs exclude QUIC and HTTP/3.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0339",
+        "package": "quinn-proto",
+        "version": "0.11.15",
+        "patched_requirements": [
+          ">=0.11.17"
+        ],
+        "cvss_vector": null,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0339.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "The Windows and Android engine graphs exclude QUIC and HTTP/3.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0340",
+        "package": "quinn-proto",
+        "version": "0.11.15",
+        "patched_requirements": [
+          ">=0.11.18"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0340.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "The Windows and Android engine graphs exclude QUIC and HTTP/3.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0341",
+        "package": "quinn-proto",
+        "version": "0.11.15",
+        "patched_requirements": [
+          ">=0.11.17"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0341.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "The Windows and Android engine graphs exclude QUIC and HTTP/3.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0342",
+        "package": "quinn-proto",
+        "version": "0.11.15",
+        "patched_requirements": [
+          ">=0.11.17"
+        ],
+        "cvss_vector": null,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0342.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "The Windows and Android engine graphs exclude QUIC and HTTP/3.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0293",
+        "package": "ringbuf",
+        "version": "0.3.3",
+        "patched_requirements": [
+          ">=0.5.2"
+        ],
+        "cvss_vector": null,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0293.html",
+        "status": "affected_element_type_not_used",
+        "compiled_in_target_graph": {
+          "windows_x64": true,
+          "android_arm64": true
+        },
+        "reason": "The advisory requires a destructor that panics while dropping an element. The native audio buffers store f32 values.",
+        "evidence": [
+          "apps/native/src/client.rs:2197",
+          "apps/native/src/client/audio_playback.rs:74"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2020-0071",
+        "package": "time",
+        "version": "0.1.45",
+        "patched_requirements": [
+          ">=0.2.23"
+        ],
+        "cvss_vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2020-0071.html",
+        "status": "outside_inspected_target_graphs",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": false
+        },
+        "reason": "Both inspected engine graphs exclude this version of time.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2026-0009",
+        "package": "time",
+        "version": "0.3.36",
+        "patched_requirements": [
+          ">=0.3.47"
+        ],
+        "cvss_vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:L/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H",
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0009.html",
+        "status": "affected_format_not_found",
+        "compiled_in_target_graph": {
+          "windows_x64": true,
+          "android_arm64": true
+        },
+        "reason": "The advisory requires parsing untrusted input with Rfc2822. Reviewed callers are ASN.1 and X.509 time, certificate construction, and WebRTC. No Rfc2822 parse call was found in the audited path.",
+        "evidence": [
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      },
+      {
+        "id": "RUSTSEC-2025-0040",
+        "package": "users",
+        "version": "0.11.0",
+        "patched_requirements": [],
+        "cvss_vector": null,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2025-0040.html",
+        "status": "affected_authorization_api_not_found",
+        "compiled_in_target_graph": {
+          "windows_x64": false,
+          "android_arm64": true
+        },
+        "reason": "The advisory affects supplementary group and process group enumeration used to make access decisions. Source inspection found Linux UID and username lookup rather than group checks. Rymu account and device authorization use the account service.",
+        "evidence": [
+          "apps/native/libs/base/src/platform/linux.rs:10",
+          "apps/native/src/platform/linux.rs:21",
+          ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+          ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+        ]
+      }
+    ]
+  },
+  "osv": {
+    "source": "https://api.osv.dev/v1/querybatch",
+    "snapshot": "Before targeted Rust dependency changes",
+    "exact_version_queries": {
+      "crates.io": 1022,
+      "Pub": 207
+    },
+    "git_commit_queries": 69,
+    "matching_crates_io_packages": 49,
+    "matching_pub_packages": 0,
+    "openssl_wrapper_follow_up": {
+      "version": "0.10.78",
+      "remaining_advisory_ids": [
+        "GHSA-phqj-4mhp-q6mq",
+        "GHSA-xp3w-r5p5-63rr",
+        "GHSA-xv59-967r-8726"
+      ],
+      "disposition": "Remaining OpenSSL wrapper advisories require AES key wrap or OCSP URL wrapper calls. No such call was found in the Rymu paths. The patched 0.10.79 and later wrapper releases require Rust 1.80 or later. Android links OpenSSL C 3.5.4 for upstream native TLS capability. Managed account HTTPS and relay WSS explicitly use Rustls. The bundled C version remains a separate maintenance item.",
+      "c_library_source": "https://www.openssl-library.org/news/openssl-3.5-notes/"
+    }
+  },
+  "control_plane": {
+    "test_count": 26,
+    "tests_passed": 26,
+    "npm_audit_total": 0,
+    "evidence": [
+      ".local/rymu-native-audit/control-plane-tests.log",
+      ".local/rymu-native-audit/control-plane-npm-audit.json"
+    ]
+  },
+  "verification_limits": [
+    "The residual dispositions describe source and feature reachability. The lock scan retains 18 vulnerability matches.",
+    "The Pub check excludes SDK and path packages. This report does not attest Flutter SDK, Gradle and all linked C libraries.",
+    "This report does not assert successful native rebuilds, installer signing or a physical Windows-to-Android session."
+  ],
+  "local_raw_evidence": [
+    ".local/rymu-native-audit/cargo-audit-native.json",
+    ".local/rymu-native-audit/cargo-audit-native-patched.json",
+    ".local/rymu-native-audit/native-advisory-summary.csv",
+    ".local/rymu-native-audit/native-lockfile-osv.json",
+    ".local/rymu-native-audit/cargo-tree-x86_64-pc-windows-msvc.log",
+    ".local/rymu-native-audit/cargo-tree-aarch64-linux-android.log"
+  ]
+}

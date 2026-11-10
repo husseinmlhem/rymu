@@ -431,61 +431,22 @@ impl Client {
         (i32, String),
         bool,
     )> {
+        if conn_type != ConnType::DEFAULT_CONN && conn_type != ConnType::FILE_TRANSFER {
+            bail!("This connection type is not supported by Rymu.");
+        }
+        let route = crate::rymu::transport().ok_or_else(|| anyhow!("Configure a private Rymu relay first."))?;
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
         }
-        // to-do: remember the port for each peer, so that we can retry easier
-        if hbb_common::is_ip_str(peer) {
-            return Ok((
-                (
-                    connect_tcp_local(check_port(peer, RELAY_PORT + 1), None, CONNECT_TIMEOUT)
-                        .await?,
-                    true,
-                    None,
-                    None,
-                    "TCP",
-                ),
-                (0, "".to_owned()),
-                false,
-            ));
+        if !peer.bytes().all(|x| x.is_ascii_digit()) {
+            bail!("Choose a trusted computer in Rymu.");
         }
-        // Allow connect to {domain}:{port}
-        if hbb_common::is_domain_port_str(peer) {
-            return Ok((
-                (
-                    connect_tcp_local(peer, None, CONNECT_TIMEOUT).await?,
-                    true,
-                    None,
-                    None,
-                    "TCP",
-                ),
-                (0, "".to_owned()),
-                false,
-            ));
-        }
-
-        let other_server = interface.get_lch().read().unwrap().other_server.clone();
-        let (peer, other_server, key, token) = if let Some((a, b, c)) = other_server.as_ref() {
-            (a.as_ref(), b.as_ref(), c.as_ref(), "")
-        } else {
-            (peer, "", key, token)
-        };
-        let (rendezvous_server, servers, contained) = if other_server.is_empty() {
-            crate::get_rendezvous_server(1_000).await
-        } else {
-            if other_server == PUBLIC_SERVER {
-                (
-                    check_port(RENDEZVOUS_SERVERS[0], RENDEZVOUS_PORT),
-                    RENDEZVOUS_SERVERS[1..]
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect(),
-                    true,
-                )
-            } else {
-                (check_port(other_server, RENDEZVOUS_PORT), Vec::new(), true)
-            }
-        };
+        let key = route.rendezvous_key.as_str();
+        let token = "";
+        let other_server = "";
+        let rendezvous_server = check_port(&route.rendezvous_server, RENDEZVOUS_PORT);
+        let servers = Vec::<String>::new();
+        let contained = true;
 
         // Same relay gate as the v6 socket below: under any forced relay the v6 punch cannot
         // be used, so probing v6 reachability is wasted work on every such connection.
@@ -1669,7 +1630,6 @@ impl Client {
         // Without a trusted identity (absent, or unverifiable under our configured root) no
         // binding is possible at all; WebRTC then proceeds like TCP's non-secure fallback —
         // DTLS-encrypted but reported unsecured. TCP/UDP/relay keep their existing behavior.
-        let is_webrtc = conn.is_webrtc();
         let mut sign_pk = None;
         let mut option_pk = None;
         if !signed_id_pk.is_empty() {
@@ -1697,6 +1657,28 @@ impl Client {
                 return Ok(option_pk);
             }
         };
+        Self::negotiate_peer_key(peer_id, sign_pk, conn).await?;
+        Ok(option_pk)
+    }
+
+    pub(crate) async fn secure_pinned_connection(
+        peer_id: &str,
+        public_key: sign::PublicKey,
+        conn: &mut Stream,
+    ) -> ResultType<()> {
+        Self::negotiate_peer_key(peer_id, public_key, conn).await?;
+        if !conn.is_secured() {
+            bail!("Rymu could not verify the computer's identity.");
+        }
+        Ok(())
+    }
+
+    async fn negotiate_peer_key(
+        peer_id: &str,
+        sign_pk: sign::PublicKey,
+        conn: &mut Stream,
+    ) -> ResultType<()> {
+        let is_webrtc = conn.is_webrtc();
         match timeout(READ_TIMEOUT, conn.next()).await? {
             Some(res) => {
                 let bytes = res?;
@@ -1781,7 +1763,7 @@ impl Client {
                 bail!("Reset by the peer");
             }
         }
-        Ok(option_pk)
+        Ok(())
     }
 
     /// Request a relay connection to the server.
@@ -1853,13 +1835,17 @@ impl Client {
     async fn create_relay(
         peer: &str,
         uuid: String,
-        relay_server: String,
+        _relay_server: String,
         key: &str,
         conn_type: ConnType,
         ipv4: bool,
     ) -> ResultType<Stream> {
         // The proxy's address family does not constrain the relay target.
-        let relay_server = check_port(relay_server, RELAY_PORT);
+        let relay_server = check_port(
+            crate::rymu::transport()
+                .context("Rymu relay transport is not configured")?.relay_server,
+            RELAY_PORT,
+        );
         let use_ws_proxy = Config::is_proxy() && is_ws_endpoint(&check_ws(&relay_server));
         let mut conn = connect_tcp(
             ipv4_to_ipv6(relay_server, ipv4 || use_ws_proxy),
@@ -2825,6 +2811,8 @@ struct ConnToken {
     session_id: u64,
 }
 
+const RYMU_PRIVACY_OVERLAY: &str = "rymu_privacy_overlay";
+
 /// Login config handler for [`Client`].
 #[derive(Default)]
 pub struct LoginConfigHandler {
@@ -2881,6 +2869,9 @@ pub struct LoginConfigHandler {
     pub enable_trusted_devices: bool,
     pub record_state: bool,
     pub record_permission: bool,
+    computer_audio_allowed: bool,
+    computer_audio_enabled: bool,
+    rymu_privacy_enabled: Option<bool>,
 }
 
 impl Deref for LoginConfigHandler {
@@ -2951,6 +2942,7 @@ impl LoginConfigHandler {
 
         self.id = id;
         self.conn_type = conn_type;
+        self.set_computer_audio_permission(false);
         let config = self.load_config();
         self.remember = !config.password.is_empty();
         self.config = config;
@@ -3195,6 +3187,23 @@ impl LoginConfigHandler {
     // `toggle_option()` is only called in a session.
     // Custom client advanced settings will not effect this function.
     pub fn toggle_option(&mut self, name: String) -> Option<Message> {
+        if name == "disable-audio" {
+            if !self.computer_audio_allowed {
+                return None;
+            }
+            self.computer_audio_enabled = !self.computer_audio_enabled;
+            let mut option = OptionMessage::new();
+            option.disable_audio = if self.computer_audio_enabled {
+                BoolOption::No.into()
+            } else {
+                BoolOption::Yes.into()
+            };
+            let mut misc = Misc::new();
+            misc.set_option(option);
+            let mut message = Message::new();
+            message.set_misc(misc);
+            return Some(message);
+        }
         let mut option = OptionMessage::default();
         let mut config = self.load_config();
         if name == "show-remote-cursor" {
@@ -3216,14 +3225,6 @@ impl LoginConfigHandler {
         } else if name == "follow-remote-window" {
             config.follow_remote_window.v = !config.follow_remote_window.v;
             option.follow_remote_window = (if config.follow_remote_window.v {
-                BoolOption::Yes
-            } else {
-                BoolOption::No
-            })
-            .into();
-        } else if name == "disable-audio" {
-            config.disable_audio.v = !config.disable_audio.v;
-            option.disable_audio = (if config.disable_audio.v {
                 BoolOption::Yes
             } else {
                 BoolOption::No
@@ -3346,6 +3347,17 @@ impl LoginConfigHandler {
     /// # Arguments
     pub fn get_config(&mut self) -> &mut PeerConfig {
         &mut self.config
+    }
+
+    pub(crate) fn set_computer_audio_permission(&mut self, allowed: bool) {
+        self.computer_audio_allowed = allowed;
+        if !allowed {
+            self.computer_audio_enabled = false;
+        }
+    }
+
+    pub(crate) fn set_rymu_privacy(&mut self, enabled: bool) {
+        self.rymu_privacy_enabled = Some(enabled);
     }
 
     /// Get [`OptionMessage`] of the current [`LoginConfigHandler`].
@@ -3477,11 +3489,11 @@ impl LoginConfigHandler {
         } else if name == keys::OPTION_TERMINAL_PERSISTENT {
             self.config.terminal_persistent.v
         } else if name == "privacy-mode" {
-            self.config.privacy_mode.v
+            self.rymu_privacy_enabled.unwrap_or(self.config.privacy_mode.v)
         } else if name == keys::OPTION_ENABLE_FILE_COPY_PASTE {
             self.config.enable_file_copy_paste.v
         } else if name == "disable-audio" {
-            self.config.disable_audio.v
+            !self.computer_audio_enabled
         } else if name == "disable-clipboard" {
             self.config.disable_clipboard.v
         } else if name == "show-quality-monitor" {
@@ -3603,6 +3615,9 @@ impl LoginConfigHandler {
     }
 
     pub fn get_option(&self, k: &str) -> String {
+        if k == "privacy-mode-impl-key" && self.rymu_privacy_enabled.is_some() {
+            return RYMU_PRIVACY_OVERLAY.to_owned();
+        }
         if let Some(v) = self.config.options.get(k) {
             v.clone()
         } else {
@@ -3766,7 +3781,7 @@ impl LoginConfigHandler {
     }
 
     /// Create a [`Message`] for login.
-    fn create_login_msg(
+    pub(super) fn create_login_msg(
         &self,
         os_username: String,
         os_password: String,

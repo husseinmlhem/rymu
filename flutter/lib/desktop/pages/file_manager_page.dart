@@ -25,6 +25,8 @@ import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
+import '../../rymu/file_locations.dart';
+import '../../rymu/native_bridge.dart';
 import '../widgets/popup_menu.dart';
 
 /// status of location bar
@@ -96,6 +98,10 @@ class _FileManagerPageState extends State<FileManagerPage>
   void initState() {
     super.initState();
     _ffi = FFI(null);
+    if (isWindows && !isWeb) {
+      model.localController.startingDirectory = () async => RymuNative.transferRoot();
+      model.remoteController.startingDirectory = () => rymuTransferFolderPath(model.remoteController);
+    }
     _ffi.start(widget.id,
         isFileTransfer: true,
         password: widget.password,
@@ -749,12 +755,26 @@ class _FileManagerViewState extends State<FileManagerView> {
                       isLocal ? MainAxisAlignment.start : MainAxisAlignment.end,
                   children: [
                     MenuButton(
-                      tooltip: translate('Home'),
+                      tooltip: Localizations.localeOf(context).languageCode == 'ar'
+                          ? 'مجلد النقل' : 'Transfer folder',
                       padding: EdgeInsets.only(
                         right: 3,
                       ),
-                      onPressed: () {
-                        controller.goToHomeDirectory();
+                      onPressed: () async {
+                        try {
+                          if (!isLocal && controller.options.value.isWindows) {
+                            await openRymuTransferFolder(context, controller,
+                                arabic: Localizations.localeOf(context).languageCode == 'ar');
+                          } else if (isLocal && isWindows && !isWeb) {
+                            if (!await controller.openDirectory(RymuNative.transferRoot())) {
+                              showToast(translate('Unable to open the receiving folder.'));
+                            }
+                          } else {
+                            controller.goToHomeDirectory();
+                          }
+                        } catch (_) {
+                          showToast(translate('Unable to open the receiving folder.'));
+                        }
                       },
                       child: SvgPicture.asset(
                         "assets/home.svg",
@@ -764,6 +784,15 @@ class _FileManagerViewState extends State<FileManagerView> {
                       color: Theme.of(context).cardColor,
                       hoverColor: Theme.of(context).hoverColor,
                     ),
+                    if (!isLocal)
+                      MenuButton(
+                        tooltip: Localizations.localeOf(context).languageCode == 'ar'
+                            ? 'مواقع ويندوز' : 'Windows locations',
+                        onPressed: () => showRymuWindowsLocations(context, controller),
+                        child: const Icon(Icons.folder_open_outlined, size: 18),
+                        color: Theme.of(context).cardColor,
+                        hoverColor: Theme.of(context).hoverColor,
+                      ),
                     MenuButton(
                       tooltip: translate('Create Folder'),
                       onPressed: () {
@@ -1643,6 +1672,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                   message: "",
                   icon: Icons.keyboard_arrow_down_rounded,
                   onTap: () async {
+                    if (!isLocal && controller.options.value.isWindows) {
+                      await showRymuWindowsLocations(context, controller, showDrives: true);
+                      return;
+                    }
                     final renderBox = _locationBarKey.currentContext
                         ?.findRenderObject() as RenderBox;
                     _locationBarKey.currentContext?.size;

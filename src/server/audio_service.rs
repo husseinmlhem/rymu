@@ -1,4 +1,4 @@
-// both soundio and cpal use wasapi on windows and coreaudio on mac, they do not support loopback.
+// The pinned CPAL opens a WASAPI loopback stream from a Windows render endpoint.
 // libpulseaudio support loopback because pulseaudio is a standalone audio service with some
 // configuration, but need to install the library and start the service on OS, not a good choice.
 // windows: https://docs.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording
@@ -61,6 +61,7 @@ pub fn set_voice_call_input_device(device: Option<String>, set_if_present: bool)
 }
 
 #[inline]
+#[cfg(not(windows))]
 fn get_audio_input() -> String {
     VOICE_CALL_INPUT_DEVICE
         .lock()
@@ -398,19 +399,8 @@ mod cpal_impl {
 
     #[cfg(windows)]
     fn get_device() -> ResultType<(Device, SupportedStreamConfig)> {
-        let audio_input = super::get_audio_input();
-        if !audio_input.is_empty() {
-            return get_audio_input(&audio_input);
-        }
-        // The pinned CPAL uses event-driven WASAPI loopback here. Windows versions
-        // before Windows 10 1703 do not signal capture events, so system audio does
-        // not work on Win7. #16095 kept the same CPAL revision and loopback path;
-        // this limitation predates that PR.
-        // Ordinary microphone input is supported on Win7 and uses the branch above.
-        // #16095 added its callback-to-encoder wake dependency; see CapturePcmSender::wake
-        // for the new scheduling risk, whose audible impact on Win7 is unmeasured.
-        // https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording
-        // https://learn.microsoft.com/en-us/windows/win32/coreaudio/capturesharedeventdriven
+        // CPAL applies AUDCLNT_STREAMFLAGS_LOOPBACK to a render endpoint. Never
+        // consult the configured microphone or voice-call input on Windows.
         let device = HOST
             .default_output_device()
             .with_context(|| "Failed to get default output device for loopback")?;
@@ -432,6 +422,7 @@ mod cpal_impl {
         get_audio_input(&audio_input)
     }
 
+    #[cfg(not(windows))]
     fn get_audio_input(audio_input: &str) -> ResultType<(Device, SupportedStreamConfig)> {
         let mut device = None;
         #[cfg(feature = "screencapturekit")]

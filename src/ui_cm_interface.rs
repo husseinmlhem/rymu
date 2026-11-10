@@ -992,6 +992,33 @@ async fn handle_fs(
     tx_log: Option<&UnboundedSender<String>>,
     _conn_id: i32,
 ) {
+    #[cfg(target_os = "windows")]
+    if crate::rymu::files::ensure_user_access().is_err() {
+        send_raw(fs::new_error(0, "Windows file transfer requires the signed-in user", -1), tx);
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    let fs = if matches!(
+        &fs,
+        ipc::FS::NewWrite { .. }
+            | ipc::FS::CreateDir { .. }
+            | ipc::FS::ReadFile { .. }
+            | ipc::FS::ReadAllFiles { .. }
+            | ipc::FS::ReadEmptyDirs { .. }
+    ) {
+        // A removable drive or local path can change while the job waits in
+        // IPC. Check again in the process that will open the actual files.
+        match spawn_blocking(move || validate_rymu_fs_request(&fs).map(|()| fs)).await {
+            Ok(Ok(request)) => request,
+            failed => {
+                let (id, file_num) = failed.ok().and_then(Result::err).unwrap_or((0, -1));
+                send_raw(fs::new_error(id, "Windows file location is unavailable", file_num), tx);
+                return;
+            }
+        }
+    } else {
+        fs
+    };
     // Android is scoped-storage only, so every peer supplied path has to stay inside the
     // app workspace. This is the filesystem boundary, keep it enforced here even though
     // `Connection` rejects out-of-workspace requests earlier as well.
@@ -1080,6 +1107,10 @@ async fn handle_fs(
             total_size,
             conn_id,
         } => {
+            if fs::get_job(id, write_jobs).is_some() {
+                send_raw(fs::new_error(id, "Duplicate transfer job", file_num), tx);
+                return;
+            }
             // Convert files to FileEntry
             let file_entries: Vec<FileEntry> = files
                 .drain(..)
@@ -1129,6 +1160,15 @@ async fn handle_fs(
         }
         ipc::FS::WriteDone { id, file_num } => {
             if let Some(job) = fs::remove_job(id, write_jobs) {
+                #[cfg(windows)]
+                if job.transferred() != job.total_size {
+                    job.remove_download_file();
+                    send_raw(
+                        fs::new_error(id, "Transfer size does not match", file_num),
+                        tx,
+                    );
+                    return;
+                }
                 #[cfg(target_os = "android")]
                 let mut job = job;
                 #[cfg(target_os = "android")]
@@ -1136,7 +1176,11 @@ async fn handle_fs(
                     send_raw(fs::new_error(id, error, file_num), tx);
                     return;
                 }
-                job.modify_time();
+                if let Err(error) = job.modify_time() {
+                    job.remove_download_file();
+                    send_raw(fs::new_error(id, error, file_num), tx);
+                    return;
+                }
                 send_raw(fs::new_done(id, file_num), tx);
                 tx_log.map(|tx| tx.send(serialize_transfer_job(&job, true, false, "")));
             }
@@ -1168,6 +1212,14 @@ async fn handle_fs(
             compressed,
         } => {
             if let Some(job) = fs::get_job(id, write_jobs) {
+                #[cfg(windows)]
+                if job.transferred().saturating_add(data.len() as u64) > job.total_size {
+                    send_raw(
+                        fs::new_error(id, "Transfer exceeds its declared size", file_num),
+                        tx,
+                    );
+                    return;
+                }
                 if let Err(err) = job
                     .write(FileTransferBlock {
                         id,
@@ -1331,6 +1383,32 @@ async fn handle_fs(
             read_all_files(path, include_hidden, id, conn_id, tx).await;
         }
         _ => {}
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn validate_rymu_fs_request(request: &ipc::FS) -> Result<(), (i32, i32)> {
+    use crate::rymu::files;
+    match request {
+        ipc::FS::NewWrite { path, id, file_num, files: entries, .. } => {
+            files::upload_destination(path, entries.iter().map(|(name, _)| name.as_str()))
+                .map(|_| ())
+                .map_err(|_| (*id, *file_num))
+        }
+        ipc::FS::CreateDir { path, id } => {
+            files::transfer_write_path(path).map(|_| ()).map_err(|_| (*id, 0))
+        }
+        ipc::FS::ReadFile { path, id, .. } | ipc::FS::ReadAllFiles { path, id, .. } => {
+            files::transfer_path(path, false)
+                .and_then(|path| files::validate_read_tree(&path))
+                .map_err(|_| (*id, -1))
+        }
+        ipc::FS::ReadEmptyDirs { dir, .. } => {
+            files::transfer_path(dir, false)
+                .and_then(|path| files::validate_read_tree(&path))
+                .map_err(|_| (0, -1))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -1647,6 +1725,12 @@ async fn read_empty_dirs(dir: &str, include_hidden: bool, tx: &UnboundedSender<D
 
 #[cfg(not(any(target_os = "ios")))]
 async fn read_dir(dir: &str, include_hidden: bool, tx: &UnboundedSender<Data>) {
+    #[cfg(target_os = "windows")]
+    let result = {
+        let dir = dir.to_owned();
+        spawn_blocking(move || crate::rymu::files::read_directory(&dir, include_hidden)).await
+    };
+    #[cfg(not(target_os = "windows"))]
     let path = {
         if dir.is_empty() {
             #[cfg(target_os = "android")]
@@ -1658,6 +1742,7 @@ async fn read_dir(dir: &str, include_hidden: bool, tx: &UnboundedSender<Data>) {
             fs::get_path(dir)
         }
     };
+    #[cfg(not(target_os = "windows"))]
     let result = spawn_blocking(move || fs::read_dir(&path, include_hidden)).await;
     let msg_out = match result {
         Ok(Ok(fd)) => {

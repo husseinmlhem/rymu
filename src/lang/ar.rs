@@ -47,6 +47,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Slogan_tip", "صنع بحب في هذا العالم الفوضوي!"),
         ("Privacy Statement", "بيان الخصوصية"),
         ("Mute", "كتم"),
+        ("Computer audio", "صوت الكمبيوتر"),
+        ("Allow computer audio", "السماح بصوت الكمبيوتر"),
         ("Build Date", "تاريخ البناء"),
         ("Version", "النسخة"),
         ("Home", "المنزل"),

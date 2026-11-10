@@ -46,7 +46,6 @@ pub fn core_main() -> Option<CoreMainAction> {
     if !crate::common::global_init() {
         return None;
     }
-    crate::load_custom_client();
     #[cfg(windows)]
     if !crate::platform::windows::bootstrap() {
         // return None to terminate the process
@@ -60,11 +59,40 @@ pub fn core_main() -> Option<CoreMainAction> {
     let mut _is_quick_support = false;
     let mut _is_flutter_invoke_new_connection = false;
     let mut no_server = false;
-    let mut arg_exe = Default::default();
     for arg in std::env::args() {
-        if i == 0 {
-            arg_exe = arg;
-        } else if i > 0 {
+        if i > 0 {
+            // Development packages provide attended Windows hosting only.
+            // Installer ownership belongs to the attended MSI. Legacy command
+            // paths can change the SCM, firewall, drivers or installed files.
+            if cfg!(windows)
+                && matches!(
+                    arg.as_str(),
+                    "--install"
+                        | "--silent-install"
+                        | "--uninstall"
+                        | "--update"
+                        | "--after-install"
+                        | "--before-uninstall"
+                        | "--remove"
+                        | "--install-service"
+                        | "--uninstall-service"
+                        | "--service-control"
+                        | "--server"
+                        | "--service"
+                        | "--portable-service"
+                        | "--elevate"
+                        | "--run-as-system"
+                        | "--quick_support"
+                        | "--install-idd"
+                        | "--uninstall-amyuni-idd"
+                        | "--uninstall-cert"
+                        | "--install-remote-printer"
+                        | "--uninstall-remote-printer"
+                        | "--deploy"
+                )
+            {
+                return None;
+            }
             #[cfg(feature = "flutter")]
             if [
                 "--connect",
@@ -133,11 +161,8 @@ pub fn core_main() -> Option<CoreMainAction> {
     if _is_flutter_invoke_new_connection {
         return core_main_invoke_new_connection(std::env::args()).map(CoreMainAction::StartUi);
     }
-    let click_setup = cfg!(windows) && args.is_empty() && crate::common::is_setup(&arg_exe);
-    if click_setup && !config::is_disable_installation() {
-        args.push("--install".to_owned());
-        flutter_args.push("--install".to_string());
-    }
+    // Renaming a portable executable must not activate the upstream installer.
+    let click_setup = false;
     if args.contains(&"--noinstall".to_string()) {
         args.clear();
     }
@@ -159,12 +184,7 @@ pub fn core_main() -> Option<CoreMainAction> {
     }
     #[cfg(windows)]
     {
-        _is_quick_support |= !crate::platform::is_installed()
-            && args.is_empty()
-            && (is_quick_support_exe(&arg_exe)
-                || config::LocalConfig::get_option("pre-elevate-service") == "Y"
-                || (!click_setup && crate::platform::is_elevated(None).unwrap_or(false)));
-        crate::portable_service::client::set_quick_support(_is_quick_support);
+        crate::portable_service::client::set_quick_support(false);
     }
     let mut log_name = "".to_owned();
     // Keep portable-service logs under a stable directory name.

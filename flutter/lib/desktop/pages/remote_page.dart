@@ -18,6 +18,8 @@ import '../../models/model.dart';
 import '../../models/input_model.dart';
 import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
+import '../../rymu/display_mapping.dart';
+import '../../rymu/native_bridge.dart';
 import '../../common/shared_state.dart';
 import '../../utils/image.dart';
 import '../widgets/remote_toolbar.dart';
@@ -145,10 +147,23 @@ class _RemotePageState extends State<RemotePage>
     _remoteCursorMoved = RemoteCursorMovedState.find(id);
   }
 
+  Timer? _monitorWatch;
+
   @override
   void initState() {
     super.initState();
+    if (isWindows) {
+      _monitorWatch = Timer.periodic(const Duration(seconds: 4), (_) {
+        if (mounted) unawaited(recoverRymuWindowAfterDisplayChange());
+      });
+    }
     _ffi = FFI(widget.sessionId);
+    if (isWindows) {
+      _ffi.ffiModel.setRymuReconnectHandler(() async {
+        if (!mounted) return false;
+        try { return RymuNative.restageConnection(widget.id); } catch (_) { return false; }
+      });
+    }
     if (isMacOS) {
       // SchedulerBinding.instance.lifecycleState is null in the first connection in a new window.
       _macOSLifecycleState = SchedulerBinding.instance.lifecycleState;
@@ -649,6 +664,11 @@ class _RemotePageState extends State<RemotePage>
 
   @override
   Future<void> dispose() async {
+    _monitorWatch?.cancel();
+    if (isWindows) {
+      _ffi.ffiModel.setRymuReconnectHandler(null);
+      try { RymuNative.forgetConnection(widget.id); } catch (_) {}
+    }
     final closeSession = closeSessionOnDispose.remove(widget.id) ?? true;
 
     // https://github.com/flutter/flutter/issues/64935

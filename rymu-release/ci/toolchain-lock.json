@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "rust": "1.75.0",
+  "python": "3.12.8",
+  "vcpkgCommit": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
+  "flutterCommit": "dec2ee5c1f98f8e84a7d5380c05eb8a3d0a81668",
+  "downloads": {
+    "flutter": {
+      "url": "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.24.5-stable.zip",
+      "sha256": "b8a7485acd3c6fb23a76b7ac09f89e8d93d62fbff7147c6f5f8c5686d949eeac",
+      "filename": "flutter.zip",
+      "provenance": "Flutter official Windows release manifest, version 3.24.5 / Dart 3.5.4, observed 2026-11-10"
+    },
+    "engine": {
+      "url": "https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip",
+      "sha256": "ec8cabf36ee4ff24c8d98de25b00e70781eb03876265aee84d0fe554a110036e",
+      "filename": "engine.zip",
+      "provenance": "Upstream workflow input; asset ID 210168939, independently redownloaded/hash-checked 2026-11-10; mutable URL is bounded by immutable hash; source-to-binary provenance remains a signing review item"
+    },
+    "libclang": {
+      "url": "https://files.pythonhosted.org/packages/df/52/c7c3f52e8d70986c42014bb19cc2a50b412126a942705ab38a268428c811/libclang-15.0.6-py2.py3-none-win_amd64.whl",
+      "sha256": "1acbadc725aa58250c8b9c201dcd694ac68858ccf9d585e8645ccd72fc29a7df",
+      "filename": "libclang.zip",
+      "provenance": "Official PyPI libclang 15.0.6 metadata, Windows amd64 wheel, observed 2026-11-10"
+    },
+    "wix": {
+      "url": "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip",
+      "sha256": "6ac824e1642d6f7277d0ed7ea09411a508f6116ba6fae0aa5f2c7daa2ff43d31",
+      "filename": "wix.zip",
+      "provenance": "Official wix3141rtm release asset 158158052, independently downloaded/hash-checked 2026-11-10; matches existing local tool ZIP"
+    }
+  }
+}

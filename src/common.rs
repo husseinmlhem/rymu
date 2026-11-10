@@ -121,6 +121,7 @@ impl Drop for SimpleCallOnReturn {
 }
 
 pub fn global_init() -> bool {
+    *config::APP_NAME.write().unwrap() = "Rymu".to_owned();
     #[cfg(all(target_os = "linux", feature = "drm"))]
     crate::platform::linux::dispatch_wayland_display_probe();
     #[cfg(target_os = "linux")]
@@ -1332,10 +1333,9 @@ pub fn get_ipv6_punch_enabled() -> bool {
 }
 
 pub fn get_webrtc_enabled() -> bool {
-    config::option2bool(
-        keys::OPTION_ENABLE_WEBRTC,
-        &get_local_option(keys::OPTION_ENABLE_WEBRTC),
-    )
+    // This Rymu release supports managed WSS and configured TCP transport.
+    // Keep DTLS disabled even while a previous route is being cancelled.
+    false
 }
 
 pub fn get_local_option(key: &str) -> String {
@@ -2142,6 +2142,9 @@ pub fn decode64<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, base64::DecodeError
 }
 
 pub async fn get_key(sync: bool) -> String {
+    if let Some(route) = crate::rymu::transport() {
+        return route.rendezvous_key;
+    }
     #[cfg(windows)]
     if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
         if !lic.key.is_empty() {

@@ -1,197 +1,97 @@
 package com.carriez.flutter_hbb
 
-import java.nio.ByteBuffer
-import java.util.Timer
-import java.util.TimerTask
-
 import android.content.ClipData
-import android.content.ClipDescription
 import android.content.ClipboardManager
-import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.Keep
-
-import hbb.MessageOuterClass.ClipboardFormat
-import hbb.MessageOuterClass.Clipboard
-import hbb.MessageOuterClass.MultiClipboards
-
+import com.google.protobuf.ByteString
+import com.google.protobuf.InvalidProtocolBufferException
 import ffi.FFI
+import hbb.MessageOuterClass.Clipboard
+import hbb.MessageOuterClass.ClipboardFormat
+import hbb.MessageOuterClass.MultiClipboards
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 
 class RdClipboardManager(private val clipboardManager: ClipboardManager) {
-    private val logTag = "RdClipboardManager"
-    private val supportedMimeTypes = arrayOf(
-        ClipDescription.MIMETYPE_TEXT_PLAIN,
-        ClipDescription.MIMETYPE_TEXT_HTML
-    )
+    private val main = Handler(Looper.getMainLooper())
+    private var foreground = false
+    private var allowedBySession = false
+    private var allowedByEngine = false
+    private var lastSentOrReceived: ByteArray? = null
 
-    // 1. Avoid listening to the same clipboard data updated by `rustUpdateClipboard`.
-    // 2. Avoid sending the clipboard data before enabling client clipboard.
-    //    1) Disable clipboard
-    //    2) Copy text "a"
-    //    3) Enable clipboard
-    //    4) Switch to another app
-    //    5) Switch back to the app
-    //    6) "a" should not be sent to the client, because it's copied before enabling clipboard
-    //
-    // It's okay to that `rustEnableClientClipboard(false)` is called after `rustUpdateClipboard`,
-    // though the `lastUpdatedClipData` will be set to null once.
-    private var lastUpdatedClipData: ClipData? = null
-    private var isClientEnabled = true;
-    private var _isCaptureStarted = false;
-
-    val isCaptureStarted: Boolean
-        get() = _isCaptureStarted
-
-    fun checkPrimaryClip(isClient: Boolean) {
-        val clipData = clipboardManager.primaryClip
-        if (clipData != null && clipData.itemCount > 0) {
-            // Only handle the first item in the clipboard for now.
-            val clip = clipData.getItemAt(0)
-            // Ignore the `isClipboardDataEqual()` check if it's a host operation.
-            // Because it's an action manually triggered by the user.
-            if (isClient) {
-                if (lastUpdatedClipData != null && isClipboardDataEqual(clipData, lastUpdatedClipData!!)) {
-                    Log.d(logTag, "Clipboard data is the same as last update, ignore")
-                    return
-                }
-            }
-            val mimeTypeCount = clipData.description.getMimeTypeCount()
-            val mimeTypes = mutableListOf<String>()
-            for (i in 0 until mimeTypeCount) {
-                mimeTypes.add(clipData.description.getMimeType(i))
-            }
-            var text: CharSequence? = null;
-            var html: String? = null;
-            if (isSupportedMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)) {
-                text = clip?.text
-            }
-            if (isSupportedMimeType(ClipDescription.MIMETYPE_TEXT_HTML)) {
-                text = clip?.text
-                html = clip?.htmlText
-            }
-            var count = 0
-            val clips = MultiClipboards.newBuilder()
-            if (text != null) {
-                val content = com.google.protobuf.ByteString.copyFromUtf8(text.toString())
-                    clips.addClipboards(Clipboard.newBuilder().setFormat(ClipboardFormat.Text).setContent(content).build())
-                    count++
-                }
-            if (html != null) {
-                val content = com.google.protobuf.ByteString.copyFromUtf8(html)
-                clips.addClipboards(Clipboard.newBuilder().setFormat(ClipboardFormat.Html).setContent(content).build())
-                count++
-            }
-            if (count > 0) {
-                val clipsBytes = clips.build().toByteArray()
-                val isClientFlag = if (isClient) 1 else 0
-                val clipsBuf = ByteBuffer.allocateDirect(clipsBytes.size + 1).apply {
-                    put(isClientFlag.toByte())
-                    put(clipsBytes)
-                }
-                clipsBuf.flip()
-                lastUpdatedClipData = clipData
-                Log.d(logTag, "${if (isClient) "client" else "host"}, send clipboard data to the remote")
-                FFI.onClipboardUpdate(clipsBuf)
-            }
-        }
+    fun setForeground(focused: Boolean) {
+        foreground = focused
     }
 
-    private fun isSupportedMimeType(mimeType: String): Boolean {
-        return supportedMimeTypes.contains(mimeType)
-    }
-
-    private fun isClipboardDataEqual(left: ClipData, right: ClipData): Boolean {
-        if (left.description.getMimeTypeCount() != right.description.getMimeTypeCount()) {
-            return false
-        }
-        val mimeTypeCount = left.description.getMimeTypeCount()
-        for (i in 0 until mimeTypeCount) {
-            if (left.description.getMimeType(i) != right.description.getMimeType(i)) {
-                return false
-            }
-        }
-
-        if (left.itemCount != right.itemCount) {
-            return false
-        }
-        for (i in 0 until left.itemCount) {
-            val mimeType = left.description.getMimeType(i)
-            if (!isSupportedMimeType(mimeType)) {
-                continue
-            }
-            val leftItem = left.getItemAt(i)
-            val rightItem = right.getItemAt(i)
-            if (mimeType == ClipDescription.MIMETYPE_TEXT_PLAIN || mimeType == ClipDescription.MIMETYPE_TEXT_HTML) {
-                if (leftItem.text != rightItem.text || leftItem.htmlText != rightItem.htmlText) {
-                    return false
-                }
-            }
-        }
-        return true
-    }
-
-    fun setCaptureStarted(started: Boolean) {
-        _isCaptureStarted = started
+    fun setSessionAllowed(allowed: Boolean) {
+        allowedBySession = allowed
+        if (!allowed) lastSentOrReceived = null
     }
 
     @Keep
     fun rustEnableClientClipboard(enable: Boolean) {
-        Log.d(logTag, "rustEnableClientClipboard: enable: $enable")
-        isClientEnabled = enable
-        lastUpdatedClipData = null
+        main.post {
+            allowedByEngine = enable
+            if (!enable) lastSentOrReceived = null
+        }
     }
 
     fun syncClipboard(isClient: Boolean) {
-        Log.d(logTag, "syncClipboard: isClient: $isClient, isClientEnabled: $isClientEnabled")
-        if (isClient && !isClientEnabled) {
-            return
-        }
-        checkPrimaryClip(isClient)
+        if (isClient) main.post(::sendIfAllowed)
+    }
+
+    private fun sendIfAllowed() {
+        if (!foreground || !allowedBySession || !allowedByEngine) return
+        val clip = clipboardManager.primaryClip ?: return
+        if (clip.itemCount == 0) return
+        val text = clip.getItemAt(0).text ?: return
+        if (text.length > MAX_BYTES) return
+        val bytes = text.toString().toByteArray(Charsets.UTF_8)
+        if (bytes.isEmpty() || bytes.size > MAX_BYTES) return
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+        if (lastSentOrReceived?.contentEquals(digest) == true) return
+        val clipboard = Clipboard.newBuilder()
+            .setFormat(ClipboardFormat.Text)
+            .setContent(ByteString.copyFrom(bytes))
+            .build()
+        val payload = MultiClipboards.newBuilder().addClipboards(clipboard).build().toByteArray()
+        val buffer = ByteBuffer.allocateDirect(payload.size + 1)
+        buffer.put(1.toByte()) // Client, never host.
+        buffer.put(payload)
+        buffer.flip()
+        lastSentOrReceived = digest
+        FFI.onClipboardUpdate(buffer)
     }
 
     @Keep
     fun rustUpdateClipboard(clips: ByteArray) {
-        val clips = MultiClipboards.parseFrom(clips)
-        var mimeTypes = mutableListOf<String>()
-        var text: String? = null
-        var html: String? = null
-        for (clip in clips.getClipboardsList()) {
-            when (clip.format) {
-                    ClipboardFormat.Text -> {
-                        mimeTypes.add(ClipDescription.MIMETYPE_TEXT_PLAIN)
-                    text = String(clip.content.toByteArray(), Charsets.UTF_8)
-                }
-                ClipboardFormat.Html -> {
-                    mimeTypes.add(ClipDescription.MIMETYPE_TEXT_HTML)
-                    html = String(clip.content.toByteArray(), Charsets.UTF_8)
-                }
-                ClipboardFormat.ImageRgba -> {
-                }
-                ClipboardFormat.ImagePng -> {
-                }
-                else -> {
-                    Log.e(logTag, "Unsupported clipboard format: ${clip.format}")
-                }
-            }
+        if (clips.size > MAX_BYTES + 256) return
+        val data = try {
+            MultiClipboards.parseFrom(clips).clipboardsList
+                .firstOrNull { it.format == ClipboardFormat.Text }?.content
+        } catch (_: InvalidProtocolBufferException) {
+            return
+        } ?: return
+        if (data.isEmpty || data.size() > MAX_BYTES || !data.isValidUtf8) return
+        main.post {
+            if (!foreground || !allowedBySession || !allowedByEngine) return@post
+            val digest = MessageDigest.getInstance("SHA-256").digest(data.toByteArray())
+            if (lastSentOrReceived?.contentEquals(digest) == true) return@post
+            lastSentOrReceived = digest
+            clipboardManager.setPrimaryClip(ClipData.newPlainText("Rymu", data.toStringUtf8()))
         }
+    }
 
-        val clipDescription = ClipDescription("clipboard", mimeTypes.toTypedArray())
-        var item: ClipData.Item? = null
-        if (text == null) {
-            Log.e(logTag, "No text content in clipboard")
-            return
-        } else {
-            if (html == null) {
-                item = ClipData.Item(text)
-            } else {
-                item = ClipData.Item(text, html)
-            }
-        }
-        if (item == null) {
-            Log.e(logTag, "No item in clipboard")
-            return
-        }
-        val clipData = ClipData(clipDescription, item)
-        lastUpdatedClipData = clipData
-        clipboardManager.setPrimaryClip(clipData)
+    // Compatibility for host source retained in the fork. Its Android services
+    // are absent from the Rymu manifest and no clipboard data is exposed there.
+    val isCaptureStarted: Boolean get() = false
+    @Suppress("UNUSED_PARAMETER")
+    fun setCaptureStarted(started: Boolean) = Unit
+    fun checkPrimaryClip(isClient: Boolean) = syncClipboard(isClient)
+
+    private companion object {
+        const val MAX_BYTES = 64 * 1024
     }
 }

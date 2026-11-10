@@ -319,6 +319,28 @@ pub fn new(source: VideoSource, idx: usize) -> GenericService {
     vs.sp
 }
 
+#[cfg(windows)]
+fn rymu_screen_privacy_active() -> bool {
+    is_current_privacy_mode_impl("rymu_privacy_overlay")
+        && get_privacy_mode_conn_id().map_or(false, |id| id > 0)
+}
+
+#[cfg(windows)]
+fn guard_rymu_privacy_capture(unavailable: bool) -> ResultType<()> {
+    if unavailable && rymu_screen_privacy_active() {
+        if let Some(id) = get_privacy_mode_conn_id() {
+            if !crate::rymu::privacy::request_close(id) {
+                // No authorized connection remains to perform normal cleanup.
+                if let Some(Err(error)) = crate::privacy_mode::turn_off_privacy(id, None) {
+                    log::warn!("Failed to restore screen privacy after capture stopped: {}", error);
+                }
+            }
+        }
+        bail!("Rymu screen privacy requires available DirectX capture; session stopped");
+    }
+    Ok(())
+}
+
 // Capturer object is expensive, avoiding to create it frequently.
 fn create_capturer(
     privacy_mode_id: i32,
@@ -353,12 +375,16 @@ fn create_capturer(
         None => {
             #[cfg(windows)]
             {
+                guard_rymu_privacy_capture(_portable_service_running
+                    || !scrap::codec::enable_directx_capture())?;
                 log::debug!("Create capturer dxgi|gdi");
-                return crate::portable_service::client::create_capturer(
+                let capturer = crate::portable_service::client::create_capturer(
                     _current,
                     display,
                     _portable_service_running,
-                );
+                )?;
+                guard_rymu_privacy_capture(capturer.is_gdi())?;
+                return Ok(capturer);
             }
             #[cfg(not(windows))]
             {
@@ -629,7 +655,14 @@ fn run(vs: VideoService) -> ResultType<()> {
     #[cfg(windows)]
     let dxgi_recovery_state = vs.dxgi_recovery_state.clone();
     let sp = vs.sp;
-    let mut c = get_capturer(vs.source, display_idx, last_portable_service_running)?;
+    let mut c = match get_capturer(vs.source, display_idx, last_portable_service_running) {
+        Ok(capturer) => capturer,
+        Err(error) => {
+            #[cfg(windows)]
+            guard_rymu_privacy_capture(true)?;
+            return Err(error);
+        }
+    };
     #[cfg(windows)]
     // ACCESS_LOST marks the next successful capturer creation as a recovery. This timestamp is
     // consumed once and temporarily holds off the normal WouldBlock-to-GDI fallback, giving the
@@ -641,11 +674,13 @@ fn run(vs: VideoService) -> ResultType<()> {
         .then(Instant::now);
     #[cfg(windows)]
     if dxgi_recovery_state.lock().unwrap().take_fallback_pending() {
+        guard_rymu_privacy_capture(true)?;
         c.set_gdi();
         log::info!("dxgi recovery exhausted, fall back to gdi");
     }
     #[cfg(windows)]
     if !scrap::codec::enable_directx_capture() && !c.is_gdi() {
+        guard_rymu_privacy_capture(true)?;
         log::info!("disable dxgi with option, fall back to gdi");
         c.set_gdi();
     }
@@ -747,6 +782,8 @@ fn run(vs: VideoService) -> ResultType<()> {
 
     while sp.ok() {
         #[cfg(windows)]
+        guard_rymu_privacy_capture(c.is_gdi())?;
+        #[cfg(windows)]
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
         check_qos(
             &mut encoder,
@@ -800,6 +837,7 @@ fn run(vs: VideoService) -> ResultType<()> {
             if crate::platform::windows::desktop_changed()
                 && !crate::portable_service::client::running()
             {
+                guard_rymu_privacy_capture(true)?;
                 bail!("Desktop changed");
             }
         }
@@ -905,7 +943,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                     .map(|started| started.elapsed() >= DXGI_RECOVERY_FRAME_GRACE)
                     .unwrap_or(true)
                 {
-                    if try_gdi > 0 && !c.is_gdi() {
+                    if try_gdi > 0 && !c.is_gdi() && !rymu_screen_privacy_active() {
                         if try_gdi > 3 {
                             c.set_gdi();
                             try_gdi = 0;
@@ -964,6 +1002,8 @@ fn run(vs: VideoService) -> ResultType<()> {
                 )?;
             }
             Err(err) => {
+                #[cfg(windows)]
+                guard_rymu_privacy_capture(true)?;
                 #[cfg(windows)]
                 // The display-change check can restart capture before error handling below.
                 let recovery_attempt = if !c.is_gdi() && err.kind() == ConnectionReset {

@@ -16,14 +16,14 @@ use crate::keyboard::client::map_key_to_control_key;
 use crate::platform::WallPaperRemover;
 #[cfg(windows)]
 use crate::portable_service::client as portable_client;
-use crate::{
-    client::{
-        new_voice_call_request, new_voice_call_response, start_audio_thread, MediaData, MediaSender,
-    },
-    display_service, ipc, privacy_mode, video_service, VERSION,
-};
+use crate::{display_service, ipc, privacy_mode, video_service, VERSION};
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::{common::DEVICE_NAME, flutter::connection_manager::start_channel};
+use base::{
+    config::keys,
+    fs::{self, can_enable_overwrite_detection, JobType},
+    message_proto::{option_message::BoolOption, permission_info::Permission},
+};
 use cidr_utils::cidr::IpCidr;
 #[cfg(target_os = "android")]
 use hbb_common::protobuf::EnumOrUnknown;
@@ -45,11 +45,6 @@ use hbb_common::{
     },
     tokio_util::codec::{BytesCodec, Framed},
 };
-use base::{
-    config::keys,
-    fs::{self, can_enable_overwrite_detection, JobType},
-    message_proto::{option_message::BoolOption, permission_info::Permission},
-};
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use scrap::android::{call_main_service_key_event, call_main_service_pointer_input};
 use scrap::camera;
@@ -58,7 +53,6 @@ use serde_json::{json, value::Value};
 use std::{
     collections::HashSet,
     net::{IpAddr, Ipv6Addr},
-    num::NonZeroI64,
     path::PathBuf,
     str::FromStr,
     sync::{
@@ -356,6 +350,9 @@ impl TerminalUserToken {
     }
 }
 pub struct Connection {
+    rymu_scope: crate::rymu::Scope,
+    rymu_controller: String,
+    input_alive: Arc<AtomicBool>,
     inner: ConnInner,
     display_idx: usize,
     stream: super::Stream,
@@ -405,8 +402,6 @@ pub struct Connection {
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     enable_file_transfer: bool,
     // by peer
-    audio_sender: Option<MediaSender>,
-    // audio by the remote peer/client
     tx_input: std_mpsc::Sender<MessageInput>,
     // handle input messages
     video_ack_required: bool,
@@ -424,8 +419,6 @@ pub struct Connection {
     #[cfg(windows)]
     portable: PortableState,
     from_switch: bool,
-    voice_call_request_timestamp: Option<NonZeroI64>,
-    voice_calling: bool,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -531,10 +524,17 @@ impl Connection {
         server: super::ServerPtrWeak,
         meta: super::ConnectionMeta,
         unauthorized: UnauthorizedID,
+        lease: crate::rymu::HostLease,
     ) {
+        if !lease.valid_at_start() {
+            return;
+        }
+        let lease_stop = lease.wait_for_stop();
+        tokio::pin!(lease_stop);
         let super::ConnectionMeta {
             control_permissions,
             controlled_context,
+            ..
         } = meta;
         // Android is not supported yet, so we always set control_permissions to None.
         #[cfg(target_os = "android")]
@@ -542,12 +542,9 @@ impl Connection {
         let _raii_id = raii::ConnectionID::new(id);
         let _raii_control_permissions_id =
             raii::ControlPermissionsID::new(id, &control_permissions);
-        let salt = Config::get_effective_permanent_password_salt();
-        let hash = Hash {
-            salt,
-            challenge: Config::get_auto_password(6),
-            ..Default::default()
-        };
+        // The account proof was verified on this encrypted stream before entering
+        // Connection. A blank challenge tells Rymu to send only session parameters.
+        let hash = Hash::new();
         let (tx_from_cm_holder, mut rx_from_cm) = mpsc::unbounded_channel::<ipc::Data>();
         // holding tx_from_cm_holder to avoid cpu burning of rx_from_cm.recv when all sender closed
         let tx_from_cm = tx_from_cm_holder.clone();
@@ -565,6 +562,9 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let tx_cloned = tx.clone();
         let mut conn = Self {
+            rymu_scope: lease.permissions,
+            rymu_controller: lease.controller_id.clone(),
+            input_alive: Arc::new(AtomicBool::new(true)),
             inner: ConnInner {
                 id,
                 tx: Some(tx),
@@ -591,15 +591,16 @@ impl Connection {
             tx_to_cm,
             authorized: false,
             unauthorized_id: Some(unauthorized),
-            keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
-            clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
-            audio: Self::permission(keys::OPTION_ENABLE_AUDIO, &control_permissions),
+            keyboard: lease.permissions.input,
+            clipboard: lease.permissions.clipboard,
+            audio: cfg!(windows) && lease.permissions.audio,
             // to-do: make sure is the option correct here
-            file: Self::permission(keys::OPTION_ENABLE_FILE_TRANSFER, &control_permissions),
-            restart: Self::permission(keys::OPTION_ENABLE_REMOTE_RESTART, &control_permissions),
-            recording: Self::permission(keys::OPTION_ENABLE_RECORD_SESSION, &control_permissions),
-            block_input: Self::permission(keys::OPTION_ENABLE_BLOCK_INPUT, &control_permissions),
-            privacy_mode: Self::permission(keys::OPTION_ENABLE_PRIVACY_MODE, &control_permissions),
+            file: lease.permissions.files,
+            restart: false,
+            recording: false,
+            block_input: false,
+            privacy_mode: cfg!(windows) && lease.permissions.allows_screen_privacy()
+                && privacy_mode::is_privacy_mode_supported(),
             control_permissions,
             last_test_delay: None,
             network_delay: 0,
@@ -609,7 +610,7 @@ impl Connection {
             follow_remote_window: false,
             multi_ui_session: false,
             ip: "".to_owned(),
-            disable_audio: false,
+            disable_audio: true,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             enable_file_transfer: false,
             disable_clipboard: false,
@@ -630,9 +631,6 @@ impl Connection {
             #[cfg(windows)]
             portable: Default::default(),
             from_switch: false,
-            audio_sender: None,
-            voice_call_request_timestamp: None,
-            voice_calling: false,
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -682,9 +680,7 @@ impl Connection {
         if !conn.clipboard {
             conn.send_permission(Permission::Clipboard, false).await;
         }
-        if !conn.audio {
-            conn.send_permission(Permission::Audio, false).await;
-        }
+        conn.send_permission(Permission::Audio, false).await;
         if !conn.file {
             conn.send_permission(Permission::File, false).await;
         }
@@ -710,7 +706,10 @@ impl Connection {
         conn.stream.set_send_timeout(SEND_TIMEOUT_VIDEO);
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        std::thread::spawn(move || Self::handle_input(_rx_input, tx_cloned));
+        {
+            let input_alive = conn.input_alive.clone();
+            std::thread::spawn(move || Self::handle_input(_rx_input, tx_cloned, input_alive));
+        }
         let mut second_timer = crate::rustdesk_interval(time::interval(Duration::from_secs(1)));
 
         #[cfg(feature = "unix-file-copy-paste")]
@@ -738,6 +737,12 @@ impl Connection {
         loop {
             tokio::select! {
                 // biased; // video has higher priority // causing test_delay_timer failed while transferring big file
+                _ = &mut lease_stop => {
+                    conn.stop_computer_audio();
+                    conn.send_close_reason_no_retry("Rymu permission ended").await;
+                    conn.on_close("Rymu permission ended", true).await;
+                    break;
+                }
 
                 // Both end an unauthorized connection at once, not on the next timer tick:
                 // told to go to make room, or past the grace for its authorization. Neither
@@ -752,17 +757,9 @@ impl Connection {
                 }
                 Some(data) = rx_from_cm.recv() => {
                     match data {
-                        ipc::Data::Authorize => {
-                            conn.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::Click);
-                            conn.trusted_device = None;
-                            conn.require_2fa.take();
-                            if !conn.send_logon_response_and_keep_alive().await {
-                                break;
-                            }
-                            if conn.port_forward_socket.is_some() {
-                                break;
-                            }
-                        }
+                        // Local CM actions can close or narrow permissions; they cannot
+                        // bypass an account lease or widen its maximum scope.
+                        ipc::Data::Authorize => {}
                         ipc::Data::Close => {
                             conn.chat_unanswered = false; // seen
                             conn.file_transferred = false; //seen
@@ -803,7 +800,13 @@ impl Connection {
                         ipc::Data::SwitchPermission{name, enabled} => {
                             log::info!("Change permission {} -> {}", name, enabled);
                             if &name == "keyboard" {
+                                let enabled = enabled && conn.rymu_scope.input;
                                 conn.keyboard = enabled;
+                                if !enabled && conn.owns_screen_privacy() {
+                                    conn.on_close("Rymu screen privacy permission ended", false).await;
+                                    conn.send_close_reason_no_retry("").await;
+                                    break;
+                                }
                                 conn.send_permission(Permission::Keyboard, enabled).await;
                                 if let Some(s) = conn.server.upgrade() {
                                     s.write().unwrap().subscribe(
@@ -820,6 +823,7 @@ impl Connection {
                                         conn.inner.clone(), enabled || conn.show_remote_cursor);
                                 }
                             } else if &name == "clipboard" {
+                                let enabled = enabled && conn.rymu_scope.clipboard;
                                 conn.clipboard = enabled;
                                 conn.send_permission(Permission::Clipboard, enabled).await;
                                 if let Some(s) = conn.server.upgrade() {
@@ -828,26 +832,22 @@ impl Connection {
                                         conn.inner.clone(), conn.can_sub_clipboard_service());
                                 }
                             } else if &name == "audio" {
+                                let enabled = enabled && cfg!(windows) && conn.rymu_scope.audio
+                                    && conn.authorized && conn.is_remote();
                                 conn.audio = enabled;
-                                conn.send_permission(Permission::Audio, enabled).await;
-                                if conn.authorized {
-                                    if let Some(s) = conn.server.upgrade() {
-                                        if conn.is_authed_view_camera_conn() {
-                                            if conn.voice_calling || !conn.audio_enabled() {
-                                                s.write().unwrap().subscribe(
-                                                    super::audio_service::NAME,
-                                                    conn.inner.clone(), conn.audio_enabled());
-                                            }
-                                        } else {
-                                            s.write().unwrap().subscribe(
-                                                super::audio_service::NAME,
-                                                conn.inner.clone(), conn.audio_enabled());
-                                        }
-                                    }
+                                if !enabled {
+                                    conn.stop_computer_audio();
                                 }
+                                conn.send_permission(Permission::Audio, enabled).await;
                             } else if &name == "file" {
+                                let enabled = enabled && conn.rymu_scope.files;
                                 conn.file = enabled;
                                 conn.send_permission(Permission::File, enabled).await;
+                                if !enabled && conn.file_transfer.is_some() {
+                                    conn.send_close_reason_no_retry("Rymu file permission ended").await;
+                                    conn.on_close("Rymu file permission ended", false).await;
+                                    break;
+                                }
                                 #[cfg(feature = "unix-file-copy-paste")]
                                 if !enabled {
                                     conn.try_empty_file_clipboard();
@@ -861,15 +861,26 @@ impl Connection {
                                     );
                                 }
                             } else if &name == "restart" {
+                                let enabled = false;
                                 conn.restart = enabled;
                                 conn.send_permission(Permission::Restart, enabled).await;
                             } else if &name == "recording" {
+                                let enabled = false;
                                 conn.recording = enabled;
                                 conn.send_permission(Permission::Recording, enabled).await;
                             } else if &name == "block_input" {
+                                let enabled = false;
                                 conn.block_input = enabled;
                                 conn.send_permission(Permission::BlockInput, enabled).await;
                             } else if &name == "privacy_mode" {
+                                let enabled = enabled && conn.rymu_scope.allows_screen_privacy()
+                                    && conn.is_authed_remote_conn() && conn.peer_keyboard_enabled()
+                                    && cfg!(windows) && privacy_mode::is_privacy_mode_supported();
+                                if !enabled && conn.owns_screen_privacy() {
+                                    conn.on_close("Rymu screen privacy permission ended", false).await;
+                                    conn.send_close_reason_no_retry("").await;
+                                    break;
+                                }
                                 // Keep permission state and runtime state consistent:
                                 // when revoking the permission, try to leave privacy mode first.
                                 // Otherwise we could end up in an inconsistent state where
@@ -912,7 +923,9 @@ impl Connection {
                             }
                         }
                         ipc::Data::RawMessage(bytes) => {
-                            allow_err!(conn.stream.send_raw(bytes).await);
+                            if conn.authorized && conn.file && conn.file_transfer.is_some() {
+                                allow_err!(conn.stream.send_raw(bytes).await);
+                            }
                         }
                         #[cfg(target_os = "windows")]
                         ipc::Data::ClipboardFile(clip) => {
@@ -979,16 +992,7 @@ impl Connection {
                             msg.set_misc(misc);
                             conn.send(msg).await;
                         }
-                        ipc::Data::VoiceCallResponse(accepted) => {
-                            conn.handle_voice_call(accepted).await;
-                        }
-                        ipc::Data::CloseVoiceCall(_reason) => {
-                            log::debug!("Close the voice call from the ipc.");
-                            conn.close_voice_call().await;
-                            // Notify the peer that we closed the voice call.
-                            let msg = new_voice_call_request(false);
-                            conn.send(msg).await;
-                        }
+                        ipc::Data::VoiceCallResponse(_) | ipc::Data::CloseVoiceCall(_) => {}
                         ipc::Data::ReadJobInitResult { id, file_num, include_hidden, conn_id, result } => {
                             if conn_id == conn.inner.id() {
                                 conn.handle_read_job_init_result(id, file_num, include_hidden, result).await;
@@ -1076,11 +1080,16 @@ impl Connection {
                         break;
                     }
                 }
-                Some((instant, value)) = rx_video.recv() => {
+                Some((instant, mut value)) = rx_video.recv() => {
                     if !conn.video_ack_required {
                         if let Some(message::Union::VideoFrame(vf)) = &value.union {
                             video_service::notify_video_frame_fetched(vf.display as usize, id, Some(instant.into()));
                         }
+                    }
+                    if !conn.rymu_scope.multi_display
+                        && !crate::rymu::show_primary_video(&mut value, conn.display_idx)
+                    {
+                        continue;
                     }
                     if let Err(err) = conn.stream.send(&value as &Message).await {
                         conn.on_close(&err.to_string(), false).await;
@@ -1091,6 +1100,16 @@ impl Connection {
                     let latency = instant.elapsed().as_millis() as i64;
                     #[allow(unused_mut)]
                     let mut msg = value;
+                    if crate::rymu::is_clipboard(&msg) {
+                        if !conn.clipboard_enabled() || !conn.authorized { continue; }
+                        if !crate::rymu::filter_clipboard(Arc::make_mut(&mut msg)) { continue; }
+                    }
+                    let audio = matches!(msg.union.as_ref(), Some(message::Union::AudioFrame(_)))
+                        || matches!(msg.union.as_ref(), Some(message::Union::Misc(m))
+                            if matches!(m.union.as_ref(), Some(misc::Union::AudioFormat(_))));
+                    if audio && !conn.audio_enabled() {
+                        continue;
+                    }
 
                     if latency > 1000 {
                         match &msg.union {
@@ -1116,6 +1135,12 @@ impl Connection {
                             conn.refresh_video_display(None);
                             #[cfg(target_os = "macos")]
                             conn.retina.set_displays(&_pi.displays);
+                            if !conn.rymu_scope.multi_display {
+                                crate::rymu::show_primary_display(
+                                    Arc::make_mut(&mut msg).mut_peer_info(),
+                                    conn.display_idx,
+                                );
+                            }
                         }
                         Some(message::Union::CursorPosition(pos)) => {
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1151,6 +1176,11 @@ impl Connection {
                 Some(data) = rx_from_authed.recv() => {
                     match data {
                         ipc::Data::Close => {
+                            if conn.owns_screen_privacy() {
+                                conn.on_close("Rymu screen privacy stopped locally", false).await;
+                                conn.send_close_reason_no_retry("").await;
+                                break;
+                            }
                             conn.send(crate::common::make_privacy_mode_msg(
                                 back_notification::PrivacyModeState::PrvOnByOther,
                                 String::new(),
@@ -1251,7 +1281,7 @@ impl Connection {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn handle_input(receiver: std_mpsc::Receiver<MessageInput>, tx: Sender) {
+    fn handle_input(receiver: std_mpsc::Receiver<MessageInput>, tx: Sender, input_alive: Arc<AtomicBool>) {
         let mut block_input_mode = false;
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
@@ -1262,6 +1292,7 @@ impl Connection {
         reset_input_ondisconn();
         loop {
             match receiver.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(_) if !input_alive.load(Ordering::Acquire) => break,
                 Ok(v) => match v {
                     MessageInput::Mouse(mouse_input) => {
                         handle_mouse(
@@ -1523,7 +1554,7 @@ impl Connection {
         let mut msg_out = Message::new();
         msg_out.set_hash(self.hash.clone());
         self.send(msg_out).await;
-        self.get_api_server();
+        // The upstream account/audit API is not part of Rymu.
         let mut audit = json!({
             "ip": addr.ip(),
             "action": "new",
@@ -1910,6 +1941,13 @@ impl Connection {
         }
         self.lr.trusted_device_v2_token.clear();
         self.authorized = true;
+        self.audio = self.audio && self.is_remote();
+        self.send_permission(Permission::Audio, self.audio).await;
+        self.privacy_mode = self.privacy_mode && self.is_remote();
+        self.send_permission(Permission::PrivacyMode, self.privacy_mode).await;
+        if self.rymu_scope.clipboard {
+            crate::rymu::host_select_clipboard(self.inner.id());
+        }
         self.unauthorized_id = None;
         // One-time means gone once it has let a peer in, not once that peer
         // leaves. This session's later logins come in on the password the
@@ -1985,6 +2023,16 @@ impl Connection {
         }
         #[cfg(target_os = "windows")]
         {
+            platform_additions.insert(
+                "rymu_displays".into(),
+                json!(crate::rymu::windows_displays()),
+            );
+            if let Some(locale) = crate::rymu::windows_locale() {
+                platform_additions.insert("rymu_ui_locale".into(), json!(locale));
+            }
+            if let Some(layout) = crate::rymu::windows_keyboard_layout() {
+                platform_additions.insert("rymu_keyboard_layout".into(), json!(layout));
+            }
             platform_additions.insert(
                 "is_installed".into(),
                 json!(crate::platform::is_installed()),
@@ -2100,7 +2148,7 @@ impl Connection {
         pi.username = username;
         pi.sas_enabled = sas_enabled;
         pi.features = Some(Features {
-            privacy_mode: privacy_mode::is_privacy_mode_supported(),
+            privacy_mode: self.privacy_mode && self.rymu_scope.allows_screen_privacy(),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             terminal,
             ..Default::default()
@@ -2177,6 +2225,9 @@ impl Connection {
                         })
                         .into();
                     }
+                    if !self.rymu_scope.multi_display {
+                        crate::rymu::show_primary_display(&mut pi, self.display_idx);
+                    }
                     res.set_peer_info(pi);
                     sub_service = true;
 
@@ -2202,7 +2253,8 @@ impl Connection {
             self.keyboard = false;
             let is_existing_dir = !dir.is_empty() && std::path::Path::new(&dir).is_dir();
             #[cfg(target_os = "android")]
-            let is_existing_dir = is_existing_dir || fs::android::is_path(std::path::Path::new(&dir));
+            let is_existing_dir =
+                is_existing_dir || fs::android::is_path(std::path::Path::new(&dir));
             #[cfg(target_os = "android")]
             let is_allowed_dir =
                 is_existing_dir && crate::common::is_peer_path_allowed_async(&dir, false).await;
@@ -2350,7 +2402,9 @@ impl Connection {
     }
 
     fn clipboard_enabled(&self) -> bool {
-        self.clipboard && !self.disable_clipboard
+        self.clipboard
+            && !self.disable_clipboard
+            && crate::rymu::host_owns_clipboard(self.inner.id())
     }
 
     #[inline]
@@ -2361,7 +2415,23 @@ impl Connection {
     }
 
     fn audio_enabled(&self) -> bool {
-        self.audio && !self.disable_audio
+        cfg!(windows) && self.authorized && self.is_remote() && self.rymu_scope.audio
+            && self.audio && !self.disable_audio && crate::rymu::hosting()
+    }
+
+    fn update_audio_subscription(&self) {
+        if let Some(server) = self.server.upgrade() {
+            server.write().unwrap().subscribe(
+                super::audio_service::NAME,
+                self.inner.clone(),
+                self.audio_enabled(),
+            );
+        }
+    }
+
+    fn stop_computer_audio(&mut self) {
+        self.disable_audio = true;
+        self.update_audio_subscription();
     }
 
     #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
@@ -2889,7 +2959,20 @@ impl Connection {
         }
     }
 
-    async fn on_message(&mut self, msg: Message) -> bool {
+    async fn on_message(&mut self, mut msg: Message) -> bool {
+        if self.closed {
+            return false;
+        }
+        if crate::rymu::is_clipboard(&msg)
+            && (!self.authorized
+                || !self.clipboard_enabled()
+                || !crate::rymu::filter_clipboard(&mut msg))
+        {
+            return true;
+        }
+        if matches!(msg.union.as_ref(), Some(message::Union::OsLogin(_))) {
+            return true;
+        }
         if let Some(message::Union::Misc(misc)) = &msg.union {
             // Move the CloseReason forward, as this message needs to be received when unauthorized, especially for kcp.
             if let Some(misc::Union::CloseReason(s)) = &misc.union {
@@ -2903,6 +2986,25 @@ impl Connection {
             if matches!(msg.union.as_ref(), Some(message::Union::LoginRequest(_))) {
                 return true;
             }
+            if let Some(message::Union::Misc(misc)) = msg.union.as_ref() {
+                // Rymu viewers can choose streams, tune video and narrow their
+                // preferences. They cannot change the host's hardware/session.
+                if !matches!(
+                    misc.union.as_ref(),
+                    Some(
+                        misc::Union::SwitchDisplay(_)
+                            | misc::Union::CaptureDisplays(_)
+                            | misc::Union::Option(_)
+                            | misc::Union::RefreshVideo(_)
+                            | misc::Union::RefreshVideoDisplay(_)
+                            | misc::Union::VideoReceived(_)
+                            | misc::Union::AutoAdjustFps(_)
+                            | misc::Union::TogglePrivacyMode(_)
+                    )
+                ) {
+                    return true;
+                }
+            }
             if let Some(message) = self.authorized_scope_violation(&msg) {
                 return self.handle_authorized_scope_violation(message).await;
             }
@@ -2912,227 +3014,62 @@ impl Connection {
             if !self.check_login_scope(&lr).await {
                 return false;
             }
-            self.awaiting_2fa = false;
-            self.trusted_device = None;
-            if !self.authorized {
-                self.require_2fa = crate::auth_2fa::get_2fa(None);
-            }
-            self.handle_login_request_without_validation(&lr).await;
-            if self.authorized {
-                return true;
-            }
-            self.reset_session_scope_for_login();
-            if !self.check_id_whitelist().await {
+            if lr.username != Config::get_id() || !lr.password.is_empty() || lr.os_login.is_some() {
+                self.send_login_error("Invalid Rymu session parameters")
+                    .await;
                 return false;
             }
-            match lr.union {
-                Some(login_request::Union::FileTransfer(ft)) => {
-                    if !Self::permission(
-                        keys::OPTION_ENABLE_FILE_TRANSFER,
-                        &self.control_permissions,
-                    ) {
-                        self.send_login_error("No permission of file transfer")
-                            .await;
-                        sleep(1.).await;
-                        return false;
+            self.awaiting_2fa = false;
+            self.require_2fa = None;
+            self.trusted_device = None;
+            self.handle_login_request_without_validation(&lr).await;
+            self.lr.my_id = self.rymu_controller.clone();
+            self.lr.hwid.clear();
+            self.lr.trusted_device_v2_token.clear();
+            self.reset_session_scope_for_login();
+            match lr.union.as_ref() {
+                Some(login_request::Union::FileTransfer(_)) if self.rymu_scope.files => {
+                    match tokio::task::spawn_blocking(|| {
+                        #[cfg(target_os = "windows")]
+                        crate::rymu::files::ensure_user_access()?;
+                        crate::rymu::files::transfer_path("", true)
+                    }).await {
+                        Ok(Ok(path)) => {
+                            self.file_transfer = Some((path.to_string_lossy().into_owned(), false))
+                        }
+                        _ => {
+                            self.send_login_error("Windows file transfer is unavailable. Open Rymu as the signed-in Windows user.")
+                                .await;
+                            return false;
+                        }
                     }
-                    self.file_transfer = Some((ft.dir, ft.show_hidden));
                 }
-                Some(login_request::Union::ViewCamera(_vc)) => {
-                    if !Self::permission(keys::OPTION_ENABLE_CAMERA, &self.control_permissions) {
-                        self.send_login_error("No permission of viewing camera")
-                            .await;
-                        sleep(1.).await;
-                        return false;
-                    }
-                    self.view_camera = true;
-                }
-                Some(login_request::Union::Terminal(terminal)) => {
-                    if !Self::permission(keys::OPTION_ENABLE_TERMINAL, &self.control_permissions) {
-                        self.send_login_error("No permission of terminal").await;
-                        sleep(1.).await;
-                        return false;
-                    }
-                    #[cfg(target_os = "windows")]
-                    if !lr.os_login.username.is_empty() && !crate::platform::is_installed() {
-                        self.send_login_error("Supported only in the installed version.")
-                            .await;
-                        sleep(1.).await;
-                        return false;
-                    }
-
-                    self.terminal = true;
-                    if let Some(o) = self.options_in_login.as_ref() {
-                        self.terminal_persistent =
-                            o.terminal_persistent.enum_value() == Ok(BoolOption::Yes);
-                    }
-                    self.terminal_service_id = terminal.service_id;
-                }
-                Some(login_request::Union::PortForward(mut pf)) => {
-                    if !Self::permission(keys::OPTION_ENABLE_TUNNEL, &self.control_permissions) {
-                        self.send_login_error("No permission of IP tunneling").await;
-                        sleep(1.).await;
-                        return false;
-                    }
-                    let (addr, _is_rdp) = Self::normalize_port_forward_target(&mut pf);
-                    self.port_forward_address = addr;
-                }
-                _ => {
+                None if !self.rymu_scope.files => {
                     if !self.check_privacy_mode_on().await {
                         return false;
                     }
                 }
+                _ => {
+                    self.send_login_error("Rymu session scope denied").await;
+                    return false;
+                }
             }
-
-            self.stream.set_send_timeout(
-                if self.file_transfer.is_some()
-                    || self.terminal
-                    || matches!(self.lr.union, Some(login_request::Union::PortForward(_)))
-                {
+            self.stream
+                .set_send_timeout(if self.file_transfer.is_some() {
                     SEND_TIMEOUT_OTHER
                 } else {
                     SEND_TIMEOUT_VIDEO
-                },
-            );
-
-            if !crate::common::is_direct_ip_access(&lr.username) && lr.username != Config::get_id()
-            {
-                self.send_login_error(crate::client::LOGIN_MSG_OFFLINE)
-                    .await;
-                return false;
-            }
-
-            #[cfg(target_os = "windows")]
-            if self.terminal
-                && lr.os_login.username.trim().is_empty()
-                && crate::platform::is_prelogin()
-            {
-                self.send_login_error(
-                    "No active console user logged on, please connect and logon first.",
-                )
-                .await;
-                sleep(1.).await;
-                return false;
-            }
-
+                });
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if !should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
-                self.try_start_cm_ipc();
+            self.try_start_cm_ipc();
+            if !self.send_logon_response_and_keep_alive().await {
+                return false;
             }
-
-            // https://github.com/rustdesk/rustdesk-server-pro/discussions/646
-            // `is_logon` is used to check login with `OPTION_ALLOW_LOGON_SCREEN_PASSWORD` == "Y".
-            // `is_logon_ui()` is a fallback for logon UI detection on Windows.
-            #[cfg(target_os = "windows")]
-            let is_logon = || {
-                crate::platform::is_prelogin() || crate::platform::is_locked() || {
-                    match crate::platform::is_logon_ui() {
-                        Ok(result) => result,
-                        Err(e) => {
-                            log::error!("Failed to detect logon UI: {:?}", e);
-                            false
-                        }
-                    }
-                }
-            };
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            let is_logon = || crate::platform::is_prelogin() || crate::platform::is_locked();
-            #[cfg(any(target_os = "android", target_os = "ios"))]
-            let is_logon = || crate::platform::is_prelogin();
-
-            let allow_logon_screen_password =
-                crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
-                    && is_logon();
-
-            if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
-                || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
-            {
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
-                    if let Some(keep_alive) = self.prepare_terminal_login_for_authorization().await
-                    {
-                        return keep_alive;
-                    }
-                }
-                self.try_start_cm(lr.my_id, lr.my_name, false);
-                if hbb_common::get_version_number(&lr.version)
-                    >= hbb_common::get_version_number("1.2.0")
-                {
-                    self.send_login_error(crate::client::LOGIN_MSG_NO_PASSWORD_ACCESS)
-                        .await;
-                }
-                return true;
-            } else if self.is_recent_session(false) {
-                if !self.send_logon_response_and_keep_alive().await {
-                    return false;
-                }
-                self.try_start_cm(lr.my_id.clone(), lr.my_name.clone(), self.authorized);
-            } else if lr.password.is_empty() {
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
-                    if let Some(keep_alive) = self.prepare_terminal_login_for_authorization().await
-                    {
-                        return keep_alive;
-                    }
-                }
-                self.try_start_cm(lr.my_id, lr.my_name, false);
-            } else {
-                let (failure, res) = self.check_failure(0).await;
-                if !res {
-                    return true;
-                }
-                if !self.validate_password(allow_logon_screen_password) {
-                    self.update_failure_with_scope(failure, false, 0, FailureScope::Default);
-                    self.check_update_temporary_password(false);
-                    self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_WRONG)
-                        .await;
-                    self.try_start_cm(lr.my_id, lr.my_name, false);
-                } else {
-                    self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
-                    if !self.begin_trusted_device().await {
-                        return false;
-                    }
-                    if !self.send_logon_response_and_keep_alive().await {
-                        return false;
-                    }
-                    self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
-                }
-            }
-        } else if let Some(message::Union::Auth2fa(tfa)) = msg.union {
-            // A 2FA response may arrive after click authorization has completed.
-            // Ignore it unless this connection is still waiting for the response.
-            if !self.awaiting_2fa {
-                return true;
-            }
-            let (failure, res) = self.check_failure(1).await;
-            if !res {
-                return true;
-            }
-            if let Some(totp) = self.require_2fa.as_ref() {
-                if let Ok(res) = totp.check_current(&tfa.code) {
-                    if res {
-                        self.update_failure(failure, true, 1);
-                        self.require_2fa.take();
-                        self.set_conn_audit_two_factor(ConnAuditTwoFactor::Totp);
-                        if let Some(attempt) = self.trusted_device.as_mut() {
-                            attempt.enroll = tfa.trust_this_device;
-                        }
-                        raii::AuthedConnID::set_session_2fa(self.session_key());
-                        if !self.send_logon_response_and_keep_alive().await {
-                            return false;
-                        }
-                        self.try_start_cm(
-                            self.lr.my_id.to_owned(),
-                            self.lr.my_name.to_owned(),
-                            self.authorized,
-                        );
-                    } else {
-                        self.update_failure(failure, false, 1);
-                        self.send_login_error(crate::client::LOGIN_MSG_2FA_WRONG)
-                            .await;
-                    }
-                }
-            }
+            self.try_start_cm(
+                self.rymu_controller.clone(),
+                lr.my_name.clone(),
+                self.authorized,
+            );
         } else if let Some(message::Union::TestDelay(t)) = msg.union {
             if t.from_client {
                 let mut msg_out = Message::new();
@@ -3149,49 +3086,11 @@ impl Connection {
                     self.network_delay = new_delay;
                 }
             }
-        } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
-            #[cfg(feature = "flutter")]
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if let Some(lr) = _s.lr.clone().take() {
-                SWITCH_SIDES_UUID
-                    .lock()
-                    .unwrap()
-                    .retain(|_, v| v.0.elapsed() < SWITCH_SIDES_UUID_TTL);
-                let uuid_old = SWITCH_SIDES_UUID.lock().unwrap().remove(&lr.my_id);
-                if let Ok(uuid) = uuid::Uuid::from_slice(_s.uuid.to_vec().as_ref()) {
-                    if let Some((_instant, uuid_old)) = uuid_old {
-                        if uuid == uuid_old {
-                            if lr.union.is_some() {
-                                log::warn!(
-                                    "Rejected switch sides response for non-remote-desktop session; closing connection"
-                                );
-                                self.send_login_error("Connection not allowed").await;
-                                return false;
-                            }
-                            self.reset_session_scope_for_login();
-                            self.handle_login_request_without_validation(&lr).await;
-                            // Switching sides authorizes without a password, so it must not bypass
-                            // the whitelist, which can be a locked policy pushed by the server.
-                            if !self.check_id_whitelist().await {
-                                return false;
-                            }
-                            self.from_switch = true;
-                            self.trusted_device = None;
-                            self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::SwitchSides);
-                            if !self.send_logon_response_and_keep_alive().await {
-                                return false;
-                            }
-                            self.try_start_cm(
-                                lr.my_id.clone(),
-                                lr.my_name.clone(),
-                                self.authorized,
-                            );
-                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            self.try_start_cm_ipc();
-                        }
-                    }
-                }
-            }
+        } else if matches!(
+            msg.union.as_ref(),
+            Some(message::Union::SwitchSidesResponse(_))
+        ) {
+            return false;
         } else if self.authorized {
             if self.port_forward_socket.is_some() {
                 return true;
@@ -3518,15 +3417,24 @@ impl Connection {
                     }
                 }
                 Some(message::Union::FileAction(fa)) => {
-                    let mut handle_fa = self.file_transfer.is_some();
-                    if !handle_fa {
-                        if let Some(file_action::Union::Send(s)) = fa.union.as_ref() {
-                            if JobType::from_proto(s.file_type) == JobType::Printer {
-                                handle_fa = true;
-                            }
-                        }
-                    }
+                    let handle_fa = self.file_transfer.is_some() && self.file;
                     if handle_fa {
+                        let fa = match tokio::task::spawn_blocking(move || {
+                            let mut action = fa;
+                            Self::rymu_file_action(&mut action).map(|()| action)
+                        }).await {
+                            Ok(Ok(action)) => action,
+                            outcome => {
+                                let job = outcome.ok().and_then(Result::err).unwrap_or(0);
+                                self.send(fs::new_error(
+                                    job,
+                                    "Rymu file location is unavailable or the action is not permitted",
+                                    -1,
+                                ))
+                                .await;
+                                return true;
+                            }
+                        };
                         if self.delayed_read_dir.is_some() {
                             if let Some(file_action::Union::ReadDir(rd)) = fa.union {
                                 self.delayed_read_dir = Some((rd.path, rd.include_hidden));
@@ -3869,43 +3777,74 @@ impl Connection {
                         }
                     }
                 }
-                Some(message::Union::FileResponse(fr)) => match fr.union {
-                    Some(file_response::Union::Block(block)) => {
-                        self.send_fs(ipc::FS::WriteBlock {
-                            id: block.id,
-                            file_num: block.file_num,
-                            data: block.data,
-                            compressed: block.compressed,
-                        });
+                Some(message::Union::FileResponse(fr))
+                    if self.file && self.file_transfer.is_some() =>
+                {
+                    match fr.union {
+                        Some(file_response::Union::Block(mut block)) => {
+                            if block.data.len() > crate::rymu::MAX_FILE_BLOCK {
+                                self.send(fs::new_error(
+                                    block.id,
+                                    "Transfer block exceeds limit",
+                                    block.file_num,
+                                ))
+                                .await;
+                                return false;
+                            }
+                            if block.compressed {
+                                let Some(decoded) = crate::rymu::decompress_bounded(
+                                    &block.data,
+                                    crate::rymu::MAX_FILE_BLOCK,
+                                ) else {
+                                    self.send(fs::new_error(
+                                        block.id,
+                                        "Invalid compressed transfer block",
+                                        block.file_num,
+                                    ))
+                                    .await;
+                                    return false;
+                                };
+                                block.data = decoded.into();
+                                block.compressed = false;
+                            }
+                            self.send_fs(ipc::FS::WriteBlock {
+                                id: block.id,
+                                file_num: block.file_num,
+                                data: block.data,
+                                compressed: block.compressed,
+                            });
+                        }
+                        Some(file_response::Union::Done(d)) => {
+                            self.send_fs(ipc::FS::WriteDone {
+                                id: d.id,
+                                file_num: d.file_num,
+                            });
+                        }
+                        Some(file_response::Union::Digest(d)) => {
+                            self.send_fs(ipc::FS::CheckDigest {
+                                id: d.id,
+                                file_num: d.file_num,
+                                file_size: d.file_size,
+                                last_modified: d.last_modified,
+                                is_upload: true,
+                                is_resume: false,
+                            })
+                        }
+                        Some(file_response::Union::Error(e)) => {
+                            self.send_fs(ipc::FS::WriteError {
+                                id: e.id,
+                                file_num: e.file_num,
+                                err: e.error,
+                            });
+                        }
+                        _ => {}
                     }
-                    Some(file_response::Union::Done(d)) => {
-                        self.send_fs(ipc::FS::WriteDone {
-                            id: d.id,
-                            file_num: d.file_num,
-                        });
-                    }
-                    Some(file_response::Union::Digest(d)) => self.send_fs(ipc::FS::CheckDigest {
-                        id: d.id,
-                        file_num: d.file_num,
-                        file_size: d.file_size,
-                        last_modified: d.last_modified,
-                        is_upload: true,
-                        is_resume: d.is_resume,
-                    }),
-                    Some(file_response::Union::Error(e)) => {
-                        self.send_fs(ipc::FS::WriteError {
-                            id: e.id,
-                            file_num: e.file_num,
-                            err: e.error,
-                        });
-                    }
-                    _ => {}
-                },
+                }
                 Some(message::Union::Misc(misc)) => match misc.union {
-                    Some(misc::Union::SwitchDisplay(s)) => {
+                    Some(misc::Union::SwitchDisplay(s)) if self.rymu_scope.multi_display => {
                         self.handle_switch_display(s).await;
                     }
-                    Some(misc::Union::CaptureDisplays(displays)) => {
+                    Some(misc::Union::CaptureDisplays(displays)) if self.rymu_scope.multi_display => {
                         let add = displays.add.iter().map(|d| *d as usize).collect::<Vec<_>>();
                         let sub = displays.sub.iter().map(|d| *d as usize).collect::<Vec<_>>();
                         let set = displays.set.iter().map(|d| *d as usize).collect::<Vec<_>>();
@@ -3946,8 +3885,10 @@ impl Connection {
                     }
                     Some(misc::Union::RefreshVideoDisplay(display)) => {
                         if self.should_handle_render_broadcast_message() {
-                            self.refresh_video_display(Some(display as usize));
-                            self.update_auto_disconnect_timer();
+                            if let Some(index) = self.rymu_scope.host_display_index(display, self.display_idx) {
+                                self.refresh_video_display(Some(index));
+                                self.update_auto_disconnect_timer();
+                            }
                         }
                     }
                     Some(misc::Union::VideoReceived(_)) => {
@@ -3986,16 +3927,6 @@ impl Connection {
                         }
                         _ => {}
                     },
-                    Some(misc::Union::AudioFormat(format)) => {
-                        if !self.disable_audio {
-                            // Drop the audio sender previously.
-                            drop(std::mem::replace(&mut self.audio_sender, None));
-                            self.audio_sender = Some(start_audio_thread());
-                            self.audio_sender
-                                .as_ref()
-                                .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
-                        }
-                    }
                     #[cfg(feature = "flutter")]
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::SwitchSidesRequest(s)) => {
@@ -4087,44 +4018,23 @@ impl Connection {
                     }
                     _ => {}
                 },
-                Some(message::Union::AudioFrame(frame)) => {
-                    if !self.disable_audio {
-                        if let Some(sender) = &self.audio_sender {
-                            allow_err!(sender.send(MediaData::AudioFrame(Box::new(frame))));
-                        } else {
-                            log::warn!(
-                                "Processing audio frame without the voice call audio sender."
-                            );
-                        }
-                    }
-                }
-                Some(message::Union::VoiceCallRequest(request)) => {
-                    if request.is_connect {
-                        self.voice_call_request_timestamp = Some(
-                            NonZeroI64::new(request.req_timestamp)
-                                .unwrap_or(NonZeroI64::new(get_time()).unwrap()),
-                        );
-                        // Notify the connection manager.
-                        self.send_to_cm(Data::VoiceCallIncoming);
-                    } else {
-                        self.close_voice_call().await;
-                    }
-                }
-                Some(message::Union::VoiceCallResponse(_response)) => {
-                    // TODO: Maybe we can do a voice call from cm directly.
-                }
                 Some(message::Union::ScreenshotRequest(request)) => {
-                    if let Some(tx) = self.inner.tx.clone() {
+                    if let (Some(index), Some(tx)) = (
+                        self.rymu_scope.host_display_index(request.display, self.display_idx),
+                        self.inner.tx.clone(),
+                    ) {
                         crate::video_service::set_take_screenshot(
                             self.video_source(),
-                            request.display as _,
+                            index,
                             request.sid.clone(),
                             tx,
                         );
-                        self.refresh_video_display(Some(request.display as usize));
+                        self.refresh_video_display(Some(index));
                     }
                 }
-                Some(message::Union::PortForwardChannel(ch)) => self.handle_port_forward_channel(ch),
+                Some(message::Union::PortForwardChannel(ch)) => {
+                    self.handle_port_forward_channel(ch)
+                }
                 Some(message::Union::TerminalAction(action)) => {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     allow_err!(self.handle_terminal_action(action).await);
@@ -4135,6 +4045,48 @@ impl Connection {
             }
         }
         true
+    }
+
+    // Resolve peer paths before forwarding the job to the ordinary-user file
+    // worker. The synthetic locations and This PC lists are read-only queries.
+    fn rymu_file_action(action: &mut FileAction) -> Result<(), i32> {
+        use crate::rymu::files;
+        use file_action::Union::*;
+        let (path, job, empty_is_root, walk_tree) = match action.union.as_mut() {
+            Some(ReadDir(r)) if matches!(r.path.as_str(), files::LOCATIONS_QUERY | "/") => {
+                return Ok(());
+            }
+            Some(ReadDir(r)) => (&mut r.path, 0, true, false),
+            Some(ReadEmptyDirs(r)) => (&mut r.path, 0, true, true),
+            Some(AllFiles(r)) => (&mut r.path, r.id, false, true),
+            Some(Send(r)) if JobType::from_proto(r.file_type) == JobType::Generic => {
+                (&mut r.path, r.id, false, true)
+            }
+            Some(Receive(r)) => {
+                if r.total_size > 8 * 1024 * 1024 * 1024 {
+                    return Err(r.id);
+                }
+                files::upload_destination(&r.path, r.files.iter().map(|f| f.name.as_str()))
+                    .map_err(|_| r.id)?;
+                return Ok(());
+            }
+            Some(Create(r)) => {
+                let path = files::transfer_write_path(&r.path).map_err(|_| r.id)?;
+                r.path = path.to_str().ok_or(r.id)?.to_owned();
+                return Ok(());
+            }
+            Some(Cancel(_)) | Some(SendConfirm(_)) => return Ok(()),
+            Some(RemoveFile(r)) => return Err(r.id),
+            Some(RemoveDir(r)) => return Err(r.id),
+            Some(Rename(r)) => return Err(r.id),
+            _ => return Err(0),
+        };
+        let resolved = files::transfer_path(path, empty_is_root).map_err(|_| job)?;
+        *path = resolved.to_str().ok_or(job)?.to_owned();
+        if walk_tree {
+            files::validate_read_tree(&resolved).map_err(|_| job)?;
+        }
+        Ok(())
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -4598,6 +4550,11 @@ impl Connection {
 
     fn refresh_video_display(&self, display: Option<usize>) {
         video_service::refresh();
+        let display = if self.rymu_scope.multi_display {
+            display
+        } else {
+            Some(self.display_idx)
+        };
         self.server.upgrade().map(|s| {
             s.read().unwrap().set_video_service_opt(
                 display.map(|d| (self.video_source(), d)),
@@ -4884,48 +4841,6 @@ impl Connection {
         }
     }
 
-    pub async fn handle_voice_call(&mut self, accepted: bool) {
-        if let Some(ts) = self.voice_call_request_timestamp.take() {
-            let msg = new_voice_call_response(ts.get(), accepted);
-            if accepted {
-                crate::audio_service::set_voice_call_input_device(
-                    crate::get_default_sound_input(),
-                    false,
-                );
-                self.send_to_cm(Data::StartVoiceCall);
-            } else {
-                self.send_to_cm(Data::CloseVoiceCall("".to_owned()));
-            }
-            self.send(msg).await;
-            self.voice_calling = accepted;
-            if self.is_authed_view_camera_conn() {
-                if let Some(s) = self.server.upgrade() {
-                    s.write().unwrap().subscribe(
-                        super::audio_service::NAME,
-                        self.inner.clone(),
-                        self.audio_enabled() && accepted,
-                    );
-                }
-            }
-        } else {
-            log::warn!("Possible a voice call attack.");
-        }
-    }
-
-    pub async fn close_voice_call(&mut self) {
-        crate::audio_service::set_voice_call_input_device(None, true);
-        // Notify the connection manager that the voice call has been closed.
-        self.send_to_cm(Data::CloseVoiceCall("".to_owned()));
-        self.voice_calling = false;
-        if self.is_authed_view_camera_conn() {
-            if let Some(s) = self.server.upgrade() {
-                s.write()
-                    .unwrap()
-                    .subscribe(super::audio_service::NAME, self.inner.clone(), false);
-            }
-        }
-    }
-
     async fn update_options(&mut self, o: &OptionMessage) {
         log::info!("Option update: {:?}", o);
         if let Ok(q) = o.image_quality.enum_value() {
@@ -4981,12 +4896,12 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Ok(q) = o.follow_remote_cursor.enum_value() {
             if q != BoolOption::NotSet {
-                self.follow_remote_cursor = q == BoolOption::Yes;
+                self.follow_remote_cursor = self.rymu_scope.multi_display && q == BoolOption::Yes;
             }
         }
         if let Ok(q) = o.follow_remote_window.enum_value() {
             if q != BoolOption::NotSet {
-                self.follow_remote_window = q == BoolOption::Yes;
+                self.follow_remote_window = self.rymu_scope.multi_display && q == BoolOption::Yes;
                 if let Some(s) = self.server.upgrade() {
                     s.write().unwrap().subscribe(
                         NAME_WINDOW_FOCUS,
@@ -4996,26 +4911,10 @@ impl Connection {
                 }
             }
         }
-        if let Ok(q) = o.disable_audio.enum_value() {
-            if q != BoolOption::NotSet {
+        if self.authorized && self.is_remote() && self.audio {
+            if let Ok(q @ (BoolOption::Yes | BoolOption::No)) = o.disable_audio.enum_value() {
                 self.disable_audio = q == BoolOption::Yes;
-                if let Some(s) = self.server.upgrade() {
-                    if self.is_authed_view_camera_conn() {
-                        if self.voice_calling || !self.audio_enabled() {
-                            s.write().unwrap().subscribe(
-                                super::audio_service::NAME,
-                                self.inner.clone(),
-                                self.audio_enabled(),
-                            );
-                        }
-                    } else {
-                        s.write().unwrap().subscribe(
-                            super::audio_service::NAME,
-                            self.inner.clone(),
-                            self.audio_enabled(),
-                        );
-                    }
-                }
+                self.update_audio_subscription();
             }
         }
         #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
@@ -5075,24 +4974,7 @@ impl Connection {
                 }
             }
         }
-        // For compatibility with old versions ( < 1.2.4 ).
-        if hbb_common::get_version_number(&self.lr.version)
-            < hbb_common::get_version_number("1.2.4")
-        {
-            if let Ok(q) = o.privacy_mode.enum_value() {
-                if self.keyboard {
-                    match q {
-                        BoolOption::Yes => {
-                            self.turn_on_privacy("".to_owned()).await;
-                        }
-                        BoolOption::No => {
-                            self.turn_off_privacy("".to_owned()).await;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        // Privacy requires an explicit session request, never a saved login option.
         if let Ok(q) = o.block_input.enum_value() {
             if self.keyboard && self.block_input {
                 match q {
@@ -5170,7 +5052,11 @@ impl Connection {
     }
 
     async fn turn_on_privacy(&mut self, impl_key: String) {
-        if !self.is_authed_remote_conn() || !self.privacy_mode {
+        if !self.authorized || self.closed || !self.is_authed_remote_conn()
+            || !self.privacy_mode || !self.rymu_scope.allows_screen_privacy()
+            || !self.peer_keyboard_enabled() || !crate::rymu::hosting()
+            || impl_key != "rymu_privacy_overlay"
+        {
             let msg_out = crate::common::make_privacy_mode_msg(
                 back_notification::PrivacyModeState::PrvOnFailedDenied,
                 impl_key,
@@ -5305,21 +5191,28 @@ impl Connection {
         }
     }
 
+    fn owns_screen_privacy(&self) -> bool {
+        privacy_mode::get_privacy_mode_conn_id() == Some(self.inner.id())
+    }
+
+    fn stop_screen_privacy(&self) {
+        if self.owns_screen_privacy() {
+            if let Some(Err(error)) = privacy_mode::turn_off_privacy(self.inner.id(), None) {
+                log::warn!("Failed to restore Rymu screen privacy: {}", error);
+            }
+        }
+    }
+
     async fn on_close(&mut self, reason: &str, lock: bool) {
+        crate::rymu::host_release_clipboard(self.inner.id());
         if self.closed {
             return;
         }
         self.closed = true;
-        // If voice A,B -> C, and A,B has voice call
-        // B disconnects, C will reset the voice call input.
-        //
-        // It may be acceptable, because it's not a common case,
-        // and it's immediately known when the input device changes.
-        // C can change the input device manually in cm interface.
-        //
-        // We can add a (Vec<conn_id>, input device) to avoid this.
-        // But it's not necessary now and we have to consider two audio services(client, server).
-        crate::audio_service::set_voice_call_input_device(None, true);
+        self.authorized = false;
+        self.input_alive.store(false, Ordering::Release);
+        self.stop_screen_privacy();
+        self.stop_computer_audio();
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock
             && self.lock_after_session_end
@@ -5346,6 +5239,9 @@ impl Connection {
 
     // The `reason` should be consistent with `check_if_retry` if not empty
     async fn send_close_reason_no_retry(&mut self, reason: &str) {
+        if self.owns_screen_privacy() {
+            self.on_close(reason, false).await;
+        }
         let mut misc = Misc::new();
         if reason.is_empty() {
             misc.set_close_reason("Closed manually by the peer".to_string());
@@ -5908,7 +5804,10 @@ impl Connection {
                 message
             );
         }
-        if let Some(option) = scoped {
+        if let Some(mut option) = scoped {
+            // A login option never starts computer audio. Only a later,
+            // authorized controller action can subscribe to the render endpoint.
+            option.disable_audio = BoolOption::NotSet.into();
             self.update_options(&option).await;
         }
     }
@@ -6765,6 +6664,9 @@ impl Default for PortableState {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        self.authorized = false;
+        self.input_alive.store(false, Ordering::Release);
+        self.stop_screen_privacy();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         self.release_pressed_modifiers();
 

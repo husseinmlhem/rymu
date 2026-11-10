@@ -21,6 +21,7 @@ import '../../common/widgets/chat_page.dart';
 import '../../models/file_model.dart';
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart';
+import '../../rymu/glass.dart';
 
 /// Set only by this window's own close control, and only once the user has confirmed. Any other
 /// way the window can go - a session logout closing every window, the window manager, a native
@@ -66,7 +67,9 @@ class _DesktopServerPageState extends State<DesktopServerPage>
     // Other platforms keep the old behaviour exactly: the ambiguity this guards against is a
     // Linux session logout, which closes every window in the session.
     final byOperator = _cmClosedByOperator || !isLinux;
-    Future.wait([gFFI.serverModel.closeAll(byOperator: byOperator), gFFI.close()]).then((_) {
+    Future.wait(
+            [gFFI.serverModel.closeAll(byOperator: byOperator), gFFI.close()])
+        .then((_) {
       if (isMacOS) {
         RdPlatformChannel.instance.terminate();
       } else {
@@ -93,18 +96,37 @@ class _DesktopServerPageState extends State<DesktopServerPage>
       ],
       child: Consumer<ServerModel>(
         builder: (context, serverModel, child) {
-          final body = Scaffold(
-            backgroundColor: Theme.of(context).colorScheme.background,
+          final palette = RymuGlassPalette.of(context);
+          final theme = Theme.of(context);
+          final page = Scaffold(
+            backgroundColor:
+                isWindows ? palette.canvas : theme.colorScheme.background,
             body: ConnectionManager(),
           );
+          final body = isWindows
+              ? Theme(
+                  data: theme.copyWith(
+                    scaffoldBackgroundColor: palette.canvas,
+                    colorScheme: theme.colorScheme.copyWith(
+                      primary: palette.action,
+                      onPrimary: palette.onAction,
+                      surface: palette.canvas,
+                      onSurface: palette.ink,
+                    ),
+                  ),
+                  child: page,
+                )
+              : page;
           return isLinux
               ? buildVirtualWindowFrame(context, body)
               : workaroundWindowBorder(
                   context,
                   Container(
                     decoration: BoxDecoration(
-                        border:
-                            Border.all(color: MyTheme.color(context).border!)),
+                        border: Border.all(
+                            color: isWindows
+                                ? palette.line
+                                : MyTheme.color(context).border!)),
                     child: body,
                   ));
         },
@@ -204,7 +226,9 @@ class ConnectionManagerState extends State<ConnectionManager>
               showClose: true,
               onWindowCloseButton: handleWindowCloseButton,
               controller: serverModel.tabController,
-              selectedBorderColor: MyTheme.accent,
+              selectedBorderColor: isWindows
+                  ? RymuGlassPalette.of(context).action
+                  : MyTheme.accent,
               maxLabelWidth: 100,
               tail: null, //buildScrollJumper(),
               tabBuilder: (key, icon, label, themeConf) {
@@ -306,7 +330,17 @@ class ConnectionManagerState extends State<ConnectionManager>
                 windowManager.startDragging();
               },
               child: Container(
-                color: Theme.of(context).colorScheme.background,
+                color: isWindows
+                    ? RymuGlassPalette.of(context).canvas
+                    : Theme.of(context).colorScheme.background,
+                alignment: AlignmentDirectional.centerStart,
+                child: isWindows
+                    ? Text('Rymu',
+                        style: TextStyle(
+                          color: RymuGlassPalette.of(context).ink,
+                          fontWeight: FontWeight.w600,
+                        ))
+                    : null,
               ),
             ),
           ),
@@ -362,26 +396,35 @@ class ConnectionManagerState extends State<ConnectionManager>
 
 Widget buildConnectionCard(Client client) {
   return Consumer<ServerModel>(
-    builder: (context, value, child) => Column(
-      mainAxisAlignment: MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      key: ValueKey(client.id),
-      children: [
-        _CmHeader(client: client),
-        client.type_() == ClientType.file ||
-                client.type_() == ClientType.portForward ||
-                client.type_() == ClientType.terminal ||
-                client.disconnected
-            ? Offstage()
-            : _PrivilegeBoard(client: client),
-        Expanded(
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            child: _CmControlPanel(client: client),
-          ),
-        )
-      ],
-    ).paddingSymmetric(vertical: 4.0, horizontal: 8.0),
+    builder: (context, value, child) {
+      final type = client.type_();
+      final permissions = type == ClientType.file ||
+              type == ClientType.portForward ||
+              type == ClientType.terminal ||
+              client.disconnected
+          ? const SizedBox.shrink()
+          : _PrivilegeBoard(client: client);
+      final actions = _CmControlPanel(client: client);
+      return Column(
+        crossAxisAlignment:
+            isWindows ? CrossAxisAlignment.stretch : CrossAxisAlignment.start,
+        key: ValueKey(client.id),
+        children: [
+          _CmHeader(client: client),
+          if (isWindows) ...[
+            const SizedBox(height: 12),
+            Expanded(child: SingleChildScrollView(child: permissions)),
+            actions,
+          ] else ...[
+            permissions,
+            Expanded(
+                child:
+                    Align(alignment: Alignment.bottomCenter, child: actions)),
+          ],
+        ],
+      ).paddingSymmetric(
+          vertical: isWindows ? 10 : 4, horizontal: isWindows ? 12 : 8);
+    },
   );
 }
 
@@ -455,6 +498,7 @@ class _CmHeaderState extends State<_CmHeader>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    if (isWindows) return _buildWindowsHeader(context);
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10.0),
@@ -560,14 +604,7 @@ class _CmHeaderState extends State<_CmHeader>
                     client.type_() != ClientType.file &&
                     client.type_() != ClientType.camera),
             child: IconButton(
-              onPressed: () => checkClickTime(client.id, () {
-                if (client.type_() == ClientType.file) {
-                  gFFI.chatModel.toggleCMFilePage();
-                } else {
-                  gFFI.chatModel
-                      .toggleCMChatPage(MessageKey(client.peerId, client.id));
-                }
-              }),
+              onPressed: _toggleSidePage,
               icon: SvgPicture.asset(client.type_() == ClientType.file
                   ? 'assets/file_transfer.svg'
                   : 'assets/chat2.svg'),
@@ -581,6 +618,85 @@ class _CmHeaderState extends State<_CmHeader>
 
   @override
   bool get wantKeepAlive => true;
+
+  void _toggleSidePage() => checkClickTime(client.id, () {
+        if (client.type_() == ClientType.file) {
+          gFFI.chatModel.toggleCMFilePage();
+        } else {
+          gFFI.chatModel.toggleCMChatPage(MessageKey(client.peerId, client.id));
+        }
+      });
+
+  Widget _buildWindowsHeader(BuildContext context) {
+    final palette = RymuGlassPalette.of(context);
+    final type = client.type_();
+    final files = type == ClientType.file;
+    final active = client.authorized && !client.disconnected;
+    final status = client.disconnected
+        ? translate('Disconnected')
+        : active
+            ? translate('Connected')
+            : translate('Request access to your device');
+    return RymuGlass(
+      radius: 16,
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: palette.tint,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+                files ? Icons.folder_open_outlined : Icons.monitor_outlined,
+                color: palette.ink,
+                size: 20),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Tooltip(
+                  message: client.peerId,
+                  child: Text(client.name.isEmpty ? client.peerId : client.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: palette.ink,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)),
+                ),
+                const SizedBox(height: 4),
+                Semantics(
+                  liveRegion: true,
+                  child: Text(status,
+                      maxLines: 2,
+                      style: TextStyle(color: palette.muted, fontSize: 12)),
+                ),
+                if (active)
+                  Obx(() => Text(
+                      formatDurationToTime(Duration(seconds: _time.value)),
+                      style: TextStyle(color: palette.muted, fontSize: 12))),
+              ],
+            ),
+          ),
+          if (client.authorized &&
+              (type == ClientType.remote || files || type == ClientType.camera))
+            IconButton(
+              onPressed: _toggleSidePage,
+              tooltip: translate(files ? 'Transfer file' : 'Text chat'),
+              icon: Icon(
+                  files ? Icons.folder_outlined : Icons.chat_bubble_outline,
+                  size: 19,
+                  color: palette.ink),
+            ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildClientAvatar() {
     return buildAvatarWidget(
@@ -623,7 +739,13 @@ class _PrivilegeBoard extends StatefulWidget {
 }
 
 class _PrivilegeBoardState extends State<_PrivilegeBoard> {
-  late final client = widget.client;
+  Client get client => widget.client;
+  late final _initialPermissions = (
+    keyboard: client.keyboard,
+    clipboard: client.clipboard,
+    file: client.file,
+    audio: client.audio,
+  );
   Widget buildPermissionIcon(bool enabled, IconData iconData,
       Function(bool)? onTap, String tooltipText,
       {required bool canModify}) {
@@ -666,6 +788,9 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
     final canModifyPermission =
         bind.mainGetBuildinOption(key: kOptionEnablePermChangeInAcceptWindow) !=
             'N';
+    if (isWindows && client.type_() == ClientType.remote) {
+      return _buildWindowsPermissions(context, canModifyPermission);
+    }
     return Container(
       width: double.infinity,
       height: 160.0,
@@ -857,6 +982,80 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
                     ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWindowsPermissions(BuildContext context, bool canModify) {
+    final palette = RymuGlassPalette.of(context);
+    final granted = _initialPermissions;
+
+    Widget permission({
+      required String key,
+      required String label,
+      required bool value,
+      required bool allowed,
+      required ValueChanged<bool> update,
+    }) =>
+        SwitchListTile(
+          title: Text(translate(label), style: const TextStyle(fontSize: 13)),
+          value: value,
+          dense: true,
+          activeColor: palette.action,
+          activeTrackColor: palette.action.withOpacity(0.25),
+          onChanged: canModify && allowed
+              ? (enabled) => checkClickTime(client.id, () {
+                    bind.cmSwitchPermission(
+                        connId: client.id, name: key, enabled: enabled);
+                    if (mounted) setState(() => update(enabled));
+                  })
+              : null,
+        );
+
+    return RymuGlass(
+      radius: 14,
+      child: ExpansionTile(
+        leading: const Icon(Icons.shield_outlined, size: 20),
+        title: Text(translate('Permissions'),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        textColor: palette.ink,
+        collapsedTextColor: palette.ink,
+        iconColor: palette.ink,
+        collapsedIconColor: palette.muted,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+        shape: const Border(),
+        collapsedShape: const Border(),
+        children: [
+          permission(
+            key: 'keyboard',
+            label: 'Enable keyboard/mouse',
+            value: client.keyboard,
+            allowed: granted.keyboard,
+            update: (value) => client.keyboard = value,
+          ),
+          permission(
+            key: 'clipboard',
+            label: 'Enable clipboard',
+            value: client.clipboard,
+            allowed: granted.clipboard,
+            update: (value) => client.clipboard = value,
+          ),
+          permission(
+            key: 'file',
+            label: 'Enable file copy and paste',
+            value: client.file,
+            allowed: granted.file,
+            update: (value) => client.file = value,
+          ),
+          if (granted.audio)
+            permission(
+              key: 'audio',
+              label: 'Allow computer audio',
+              value: client.audio,
+              allowed: granted.audio,
+              update: (value) => client.audio = value,
+            ),
         ],
       ),
     );
@@ -1143,27 +1342,51 @@ class _CmControlPanel extends StatelessWidget {
       String? tooltip,
       GestureTapDownCallback? onTapDown}) {
     assert(!(onClick == null && onTapDown == null));
+    final palette = RymuGlassPalette.of(context);
+    final primary = text == 'Disconnect' || text == 'Accept';
+    final foreground = isWindows
+        ? primary
+            ? palette.onAction
+            : palette.ink
+        : textColor;
+    final background = isWindows
+        ? primary
+            ? palette.action
+            : color == Colors.transparent
+                ? Colors.transparent
+                : palette.tint
+        : color;
+    final buttonIcon = isWindows && icon is Icon
+        ? Icon(icon.icon, size: icon.size, color: foreground)
+        : icon;
     Widget textWidget;
     if (icon != null) {
       textWidget = Text(
         translate(text),
-        style: TextStyle(color: textColor),
+        style: TextStyle(
+            color: foreground, fontWeight: isWindows ? FontWeight.w600 : null),
         textAlign: TextAlign.center,
       );
     } else {
       textWidget = Expanded(
         child: Text(
           translate(text),
-          style: TextStyle(color: textColor),
+          style: TextStyle(
+              color: foreground,
+              fontWeight: isWindows ? FontWeight.w600 : null),
           textAlign: TextAlign.center,
         ),
       );
     }
     final borderRadius = BorderRadius.circular(10.0);
     final btn = Container(
-      height: 28,
+      height: isWindows ? 36 : 28,
       decoration: BoxDecoration(
-          color: color, borderRadius: borderRadius, border: border),
+          color: background,
+          borderRadius: borderRadius,
+          border: isWindows && border != null
+              ? Border.all(color: palette.line)
+              : border),
       child: InkWell(
         borderRadius: borderRadius,
         onTap: () {
@@ -1179,7 +1402,8 @@ class _CmControlPanel extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Offstage(offstage: icon == null, child: icon).marginOnly(right: 5),
+            Offstage(offstage: icon == null, child: buttonIcon)
+                .marginOnly(right: 5),
             textWidget,
           ],
         ),

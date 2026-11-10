@@ -1,13 +1,9 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::clipboard::{clipboard_listener, update_clipboard, ClipboardSide};
 #[cfg(not(any(target_os = "ios")))]
-use crate::{audio_service, clipboard::CLIPBOARD_INTERVAL, ConnInner, CLIENT_SERVER};
+use crate::clipboard::CLIPBOARD_INTERVAL;
 use crate::{
-    client::{
-        self, new_voice_call_request, Client, Data, Interface, MediaData, MediaSender,
-        QualityStatus, MILLI1, SEC30,
-    },
-    common::get_default_sound_input,
+    client::{self, Client, Data, Interface, MediaData, MediaSender, QualityStatus, MILLI1, SEC30},
     ui_session_interface::{InvokeUiSession, Session},
 };
 
@@ -41,12 +37,10 @@ use base::{
 ))]
 use clipboard::ContextSend;
 use crossbeam_queue::ArrayQueue;
-#[cfg(not(target_os = "ios"))]
-use hbb_common::tokio::sync::mpsc::error::TryRecvError;
 use hbb_common::{
     allow_err,
     config::{self, LocalConfig, PeerConfig, TransferSerde},
-    get_time, log,
+    log,
     protobuf::Message as _,
     rendezvous_proto::ConnType,
     timeout,
@@ -63,7 +57,6 @@ use scrap::CodecFormat;
 use std::{
     collections::{HashMap, HashSet},
     ffi::c_void,
-    num::NonZeroI64,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -76,9 +69,6 @@ pub struct Remote<T: InvokeUiSession> {
     audio_sender: MediaSender,
     receiver: mpsc::UnboundedReceiver<Data>,
     sender: mpsc::UnboundedSender<Data>,
-    // Stop sending local audio to remote client.
-    stop_voice_call_sender: Option<std::sync::mpsc::Sender<()>>,
-    voice_call_request_timestamp: Option<NonZeroI64>,
     read_jobs: Vec<fs::TransferJob>,
     write_jobs: Vec<fs::TransferJob>,
     remove_jobs: HashMap<i32, RemoveJob>,
@@ -147,8 +137,6 @@ impl<T: InvokeUiSession> Remote<T> {
             client_conn_id: 0,
             data_count: Arc::new(AtomicUsize::new(0)),
             video_format: CodecFormat::Unknown,
-            stop_voice_call_sender: None,
-            voice_call_request_timestamp: None,
             elevation_requested: false,
             peer_info: Default::default(),
             video_threads: Default::default(),
@@ -195,16 +183,49 @@ impl<T: InvokeUiSession> Remote<T> {
             ConnType::default()
         };
 
-        match Client::start(
-            &self.handler.get_id(),
-            key,
-            token,
-            conn_type,
-            self.handler.clone(),
-        )
-        .await
-        {
+        let Some(ticket) =
+            crate::rymu::take_ticket(&self.handler.get_id(), conn_type == ConnType::FILE_TRANSFER)
+        else {
+            self.handler
+                .on_error("Open this computer from the Rymu device list.");
+            self.handle_disconnected(round);
+            return;
+        };
+        self.handler
+            .lc
+            .write()
+            .unwrap()
+            .set_computer_audio_permission(false);
+        self.handler.set_permission("audio", false);
+        self.handler.lc.write().unwrap().set_rymu_privacy(false);
+        self.handler.update_privacy_mode();
+        let connection = if ticket.managed {
+            self.handler.update_direct(None);
+            self.handler.update_received(false);
+            crate::rymu::start_managed_controller(&ticket)
+                .await
+                .map(|(stream, key)| ((stream, false, Some(key), None, "Relay"), (0, String::new())))
+        } else {
+            Client::start(
+                &self.handler.get_id(),
+                key,
+                token,
+                conn_type,
+                self.handler.clone(),
+            ).await
+        };
+        match connection {
             Ok(((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server))) => {
+                if !ticket.managed {
+                    if let Err(error) =
+                        crate::rymu::controller_authorize(&ticket, pk.as_deref(), &mut peer).await
+                    {
+                        self.handler.on_error(&error.to_string());
+                        self.handle_disconnected(round);
+                        return;
+                    }
+                }
+                crate::rymu::remember_connection(&ticket);
                 self.handler
                     .connection_round_state
                     .lock()
@@ -426,10 +447,6 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 log::debug!("Exit io_loop of id={}", self.handler.get_id());
-                // Stop client audio server.
-                if let Some(s) = self.stop_voice_call_sender.take() {
-                    s.send(()).ok();
-                }
                 if kcp.is_some() {
                     // Attempted rather than skipped even here: if the loss was one-way the peer
                     // does get it, and drops its side instead of waiting out its own timeout.
@@ -471,6 +488,11 @@ impl<T: InvokeUiSession> Remote<T> {
             .lock()
             .unwrap()
             .set_disconnected(round);
+
+        if _set_disconnected_ok {
+            self.handler.lc.write().unwrap().set_rymu_privacy(false);
+            self.handler.update_privacy_mode();
+        }
 
         #[cfg(not(target_os = "ios"))]
         if self.handler.is_default() && _set_disconnected_ok {
@@ -576,96 +598,6 @@ impl<T: InvokeUiSession> Remote<T> {
         }
     }
 
-    fn stop_voice_call(&mut self) {
-        let voice_call_sender = std::mem::replace(&mut self.stop_voice_call_sender, None);
-        if let Some(stopper) = voice_call_sender {
-            let _ = stopper.send(());
-        }
-    }
-
-    // Start a voice call recorder, records audio and send to remote
-    fn start_voice_call(&mut self) -> Option<std::sync::mpsc::Sender<()>> {
-        if self.handler.is_file_transfer()
-            || self.handler.is_port_forward()
-            || self.handler.is_terminal()
-        {
-            return None;
-        }
-        // iOS does not have this server.
-        #[cfg(not(any(target_os = "ios")))]
-        {
-            // NOTE:
-            // The client server and --server both use the same sound input device.
-            // It's better to distinguish the server side and client side.
-            // But it' not necessary for now, because it's not a common case.
-            // And it is immediately known when the input device is changed.
-            crate::audio_service::set_voice_call_input_device(get_default_sound_input(), false);
-            // Create a channel to receive error or closed message
-            let (tx, rx) = std::sync::mpsc::channel();
-            let (tx_audio_data, mut rx_audio_data) =
-                hbb_common::tokio::sync::mpsc::unbounded_channel();
-            // Create a stand-alone inner, add subscribe to audio service
-            let conn_id = CLIENT_SERVER.write().unwrap().get_new_id();
-            let client_conn_inner = ConnInner::new(conn_id.clone(), Some(tx_audio_data), None);
-            // now we subscribe
-            CLIENT_SERVER.write().unwrap().subscribe(
-                audio_service::NAME,
-                client_conn_inner.clone(),
-                true,
-            );
-            let tx_audio = self.sender.clone();
-            std::thread::spawn(move || {
-                loop {
-                    // check if client is closed
-                    match rx.try_recv() {
-                        Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            log::debug!("Exit voice call audio service of client");
-                            // unsubscribe
-                            CLIENT_SERVER.write().unwrap().subscribe(
-                                audio_service::NAME,
-                                client_conn_inner,
-                                false,
-                            );
-                            crate::audio_service::set_voice_call_input_device(None, true);
-                            break;
-                        }
-                        _ => {}
-                    }
-                    match rx_audio_data.try_recv() {
-                        Ok((_instant, msg)) => match &msg.union {
-                            Some(message::Union::AudioFrame(frame)) => {
-                                let mut msg = Message::new();
-                                msg.set_audio_frame(frame.clone());
-                                tx_audio.send(Data::Message(msg)).ok();
-                            }
-                            Some(message::Union::Misc(misc)) => {
-                                let mut msg = Message::new();
-                                msg.set_misc(misc.clone());
-                                tx_audio.send(Data::Message(msg)).ok();
-                            }
-                            _ => {}
-                        },
-                        Err(err) => {
-                            if err == TryRecvError::Empty {
-                                // ignore
-                            } else {
-                                log::debug!("Failed to record local audio channel: {}", err);
-                            }
-                            // Both arms fall through with nothing else in this loop blocking, so
-                            // without a pause the thread spun a core for the whole voice call.
-                            std::thread::sleep(std::time::Duration::from_millis(1));
-                        }
-                    }
-                }
-            });
-            return Some(tx);
-        }
-        #[cfg(target_os = "ios")]
-        {
-            None
-        }
-    }
-
     async fn send_close_reason(&mut self, peer: &mut Stream, reason: &str) {
         if self.sent_close_reason {
             return;
@@ -723,7 +655,10 @@ impl<T: InvokeUiSession> Remote<T> {
     // Capture after readiness so changes during the read can invalidate the snapshot.
     // A separate task keeps a stalled backend from blocking the connection loop.
     #[cfg(target_os = "linux")]
-    fn spawn_initial_clipboard_read_after_ready(&self, read_clipboard: impl FnOnce() + Send + 'static) {
+    fn spawn_initial_clipboard_read_after_ready(
+        &self,
+        read_clipboard: impl FnOnce() + Send + 'static,
+    ) {
         // Initial-sync wait budget, not a protocol-defined startup deadline.
         const CLIPBOARD_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -793,12 +728,24 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.start_initial_clipboard_sync();
                     return true;
                 }
-                if let Some(msg) = msg {
-                    allow_err!(peer.send(&msg).await);
+                if let Some(mut msg) = msg {
+                    if crate::rymu::viewer_owns_clipboard(&self.handler.get_id())
+                        && crate::rymu::filter_clipboard(&mut msg)
+                    {
+                        allow_err!(peer.send(&msg).await);
+                    }
                 }
             }
             Data::Message(msg) => {
-                let msg = self.trusted_device.outgoing(msg);
+                let mut msg = self.trusted_device.outgoing(msg);
+                if crate::rymu::is_clipboard(&msg)
+                    && (!self.is_connected
+                        || !crate::rymu::viewer_owns_clipboard(&self.handler.get_id())
+                        || !self.handler.is_text_clipboard_required()
+                        || !crate::rymu::filter_clipboard(&mut msg))
+                {
+                    return true;
+                }
                 // The Flutter clipboard broadcast is process-wide, so a clipboard can reach this
                 // round's queue before the round has logged in; it is dropped here, on the round
                 // itself.
@@ -818,7 +765,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         return true;
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    Some(message::Union::Clipboard(_)) | Some(message::Union::MultiClipboards(_)) => {
+                    Some(message::Union::Clipboard(_))
+                    | Some(message::Union::MultiClipboards(_)) => {
                         self.initial_clipboard_pending = false;
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1342,22 +1290,9 @@ impl<T: InvokeUiSession> Remote<T> {
                 allow_err!(peer.send(&msg).await);
                 self.elevation_requested = true;
             }
-            Data::NewVoiceCall => {
-                let msg = new_voice_call_request(true);
-                // Save the voice call request timestamp for the further validation.
-                self.voice_call_request_timestamp = Some(
-                    NonZeroI64::new(msg.voice_call_request().req_timestamp)
-                        .unwrap_or(NonZeroI64::new(get_time()).unwrap()),
-                );
-                allow_err!(peer.send(&msg).await);
-                self.handler.on_voice_call_waiting();
-            }
-            Data::CloseVoiceCall => {
-                self.stop_voice_call();
-                let msg = new_voice_call_request(false);
+            Data::NewVoiceCall | Data::CloseVoiceCall => {
                 self.handler
-                    .on_voice_call_closed("Closed manually by the peer");
-                allow_err!(peer.send(&msg).await);
+                    .on_voice_call_closed("Voice calls are unavailable in Rymu");
             }
             Data::ResetDecoder(display) => match display {
                 Some(display) => {
@@ -1505,6 +1440,9 @@ impl<T: InvokeUiSession> Remote<T> {
             return;
         }
         let lc = self.handler.lc.read().unwrap();
+        if lc.rymu_privacy_enabled.is_some() {
+            return;
+        }
         if lc.version >= hbb_common::get_version_number("1.2.4")
             && lc.get_toggle_option("privacy-mode")
         {
@@ -1694,7 +1632,14 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
-        if let Ok(msg_in) = Message::parse_from_bytes(&data) {
+        if let Ok(mut msg_in) = Message::parse_from_bytes(&data) {
+            if crate::rymu::is_clipboard(&msg_in)
+                && (!self.is_connected
+                    || !crate::rymu::viewer_owns_clipboard(&self.handler.get_id())
+                    || !crate::rymu::filter_clipboard(&mut msg_in))
+            {
+                return true;
+            }
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
                     if !self.first_frame {
@@ -1729,101 +1674,97 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Hash(hash)) => {
-                    if !self
-                        .handler
-                        .handle_hash(
-                            &self.handler.password.clone(),
-                            hash,
-                            &mut self.trusted_device,
-                            peer,
-                        )
-                        .await
-                    {
+                    if !hash.challenge.is_empty() || !hash.salt.is_empty() {
+                        return false;
+                    }
+                    let login = self.handler.lc.read().unwrap().create_login_msg(
+                        String::new(),
+                        String::new(),
+                        Vec::new(),
+                    );
+                    if peer.send(&login).await.is_err() {
                         return false;
                     }
                 }
-                Some(message::Union::LoginResponse(lr)) => match self
-                    .trusted_device
-                    .respond(lr, &self.handler)
-                    .await
-                    .union
-                {
-                    Some(login_response::Union::Error(err)) => {
-                        if !self.handler.handle_login_error(&err) {
-                            return false;
-                        }
-                    }
-                    Some(login_response::Union::PeerInfo(pi)) => {
-                        let peer_version = pi.version.clone();
-                        let peer_platform = pi.platform.clone();
-                        self.set_peer_info(&pi);
-                        if self.handler.is_view_camera() {
-                            if !self.check_view_camera_support(&peer_version, &peer_platform) {
-                                self.handler.lc.write().unwrap().handle_peer_info(&pi);
+                Some(message::Union::LoginResponse(lr)) => {
+                    match self.trusted_device.respond(lr, &self.handler).await.union {
+                        Some(login_response::Union::Error(err)) => {
+                            if !self.handler.handle_login_error(&err) {
                                 return false;
                             }
                         }
-                        if self.handler.is_terminal() {
-                            if !self.check_terminal_support(&peer_version) {
-                                self.handler.lc.write().unwrap().handle_peer_info(&pi);
-                                return false;
+                        Some(login_response::Union::PeerInfo(pi)) => {
+                            let peer_version = pi.version.clone();
+                            let peer_platform = pi.platform.clone();
+                            self.set_peer_info(&pi);
+                            if self.handler.is_view_camera() {
+                                if !self.check_view_camera_support(&peer_version, &peer_platform) {
+                                    self.handler.lc.write().unwrap().handle_peer_info(&pi);
+                                    return false;
+                                }
                             }
-                        }
-                        self.handler.handle_peer_info(pi);
-                        #[cfg(all(target_os = "windows", not(feature = "flutter")))]
-                        self.check_clipboard_file_context();
-                        if self.handler.is_default() {
-                            // Startup notifications must see the current sessions' clipboard requirements.
-                            #[cfg(feature = "flutter")]
-                            #[cfg(not(target_os = "ios"))]
-                            crate::flutter::update_text_clipboard_required();
+                            if self.handler.is_terminal() {
+                                if !self.check_terminal_support(&peer_version) {
+                                    self.handler.lc.write().unwrap().handle_peer_info(&pi);
+                                    return false;
+                                }
+                            }
+                            self.handler.handle_peer_info(pi);
+                            #[cfg(all(target_os = "windows", not(feature = "flutter")))]
+                            self.check_clipboard_file_context();
+                            if self.handler.is_default() {
+                                // Startup notifications must see the current sessions' clipboard requirements.
+                                #[cfg(feature = "flutter")]
+                                #[cfg(not(target_os = "ios"))]
+                                crate::flutter::update_text_clipboard_required();
 
-                            #[cfg(all(feature = "flutter", feature = "unix-file-copy-paste"))]
-                            crate::flutter::update_file_clipboard_required();
+                                #[cfg(all(feature = "flutter", feature = "unix-file-copy-paste"))]
+                                crate::flutter::update_file_clipboard_required();
 
-                            #[cfg(feature = "flutter")]
-                            #[cfg(not(target_os = "ios"))]
-                            let rx = Client::try_start_clipboard(None);
-                            #[cfg(not(feature = "flutter"))]
-                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            let rx = Client::try_start_clipboard(Some(
-                                crate::client::ClientClipboardContext {
-                                    cfg: self.handler.get_permission_config(),
-                                    tx: self.sender.clone(),
-                                    #[cfg(feature = "unix-file-copy-paste")]
-                                    is_file_supported: crate::is_support_file_copy_paste(
-                                        &peer_version,
-                                    ),
-                                },
-                            ));
-                            // To make sure current text clipboard data is updated.
-                            #[cfg(not(target_os = "ios"))]
-                            if let Some(mut rx) = rx {
-                                timeout(CLIPBOARD_INTERVAL, rx.recv()).await.ok();
+                                #[cfg(feature = "flutter")]
+                                #[cfg(not(target_os = "ios"))]
+                                let rx = Client::try_start_clipboard(None);
+                                #[cfg(not(feature = "flutter"))]
+                                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                                let rx = Client::try_start_clipboard(Some(
+                                    crate::client::ClientClipboardContext {
+                                        cfg: self.handler.get_permission_config(),
+                                        tx: self.sender.clone(),
+                                        #[cfg(feature = "unix-file-copy-paste")]
+                                        is_file_supported: crate::is_support_file_copy_paste(
+                                            &peer_version,
+                                        ),
+                                    },
+                                ));
+                                // To make sure current text clipboard data is updated.
+                                #[cfg(not(target_os = "ios"))]
+                                if let Some(mut rx) = rx {
+                                    timeout(CLIPBOARD_INTERVAL, rx.recv()).await.ok();
+                                }
+
+                                // `is_connected`` becomes true after the first PeerInfo.
+                                // Reconnects create a new Remote. Refreshes after a generation change
+                                // use a separate entry point and are not blocked by this guard.
+                                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                                if !self.is_connected
+                                    && self.handler.is_text_clipboard_required()
+                                    && self.handler.lc.read().unwrap().sync_init_clipboard.v
+                                {
+                                    self.start_initial_clipboard_sync();
+                                }
+                                // to-do: Android, is `sync_init_clipboard` really needed?
+                                // https://github.com/rustdesk/rustdesk/discussions/9010
                             }
 
-                            // `is_connected`` becomes true after the first PeerInfo.
-                            // Reconnects create a new Remote. Refreshes after a generation change
-                            // use a separate entry point and are not blocked by this guard.
-                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            if !self.is_connected
-                                && self.handler.is_text_clipboard_required()
-                                && self.handler.lc.read().unwrap().sync_init_clipboard.v
-                            {
-                                self.start_initial_clipboard_sync();
+                            if self.handler.is_file_transfer() {
+                                self.handler.load_last_jobs();
                             }
-                            // to-do: Android, is `sync_init_clipboard` really needed?
-                            // https://github.com/rustdesk/rustdesk/discussions/9010
-                        }
 
-                        if self.handler.is_file_transfer() {
-                            self.handler.load_last_jobs();
+                            self.is_connected = true;
                         }
-
-                        self.is_connected = true;
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 Some(message::Union::CursorData(cd)) if self.dedupes_cursors() => {
                     self.set_cursor_data_by_content(cd);
                 }
@@ -2267,7 +2208,9 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
                     Some(misc::Union::AudioFormat(f)) => {
-                        self.audio_sender.send(MediaData::AudioFormat(f)).ok();
+                        if !self.handler.lc.read().unwrap().get_toggle_option("disable-audio") {
+                            self.audio_sender.send(MediaData::AudioFormat(f)).ok();
+                        }
                     }
                     Some(misc::Union::ChatMessage(c)) => {
                         self.handler.new_message(c.text);
@@ -2293,6 +2236,11 @@ impl<T: InvokeUiSession> Remote<T> {
                                 self.handler.set_permission("clipboard", p.enabled);
                             }
                             Ok(Permission::Audio) => {
+                                self.handler
+                                    .lc
+                                    .write()
+                                    .unwrap()
+                                    .set_computer_audio_permission(p.enabled);
                                 self.handler.set_permission("audio", p.enabled);
                             }
                             Ok(Permission::File) => {
@@ -2480,7 +2428,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.handle_test_delay(t, peer).await;
                 }
                 Some(message::Union::AudioFrame(frame)) => {
-                    if !self.handler.lc.read().unwrap().disable_audio.v {
+                    if !self.handler.lc.read().unwrap().get_toggle_option("disable-audio") {
                         self.audio_sender
                             .send(MediaData::AudioFrame(Box::new(frame)))
                             .ok();
@@ -2536,34 +2484,6 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                     self.handler
                         .msgbox(&msgbox.msgtype, &msgbox.title, &msgbox.text, &link);
-                }
-                Some(message::Union::VoiceCallRequest(request)) => {
-                    if request.is_connect {
-                        // TODO: maybe we will do a voice call from the peer in the future.
-                    } else {
-                        log::debug!("The remote has requested to close the voice call");
-                        if let Some(sender) = self.stop_voice_call_sender.take() {
-                            allow_err!(sender.send(()));
-                            self.handler.on_voice_call_closed("");
-                        }
-                    }
-                }
-                Some(message::Union::VoiceCallResponse(response)) => {
-                    let ts = std::mem::replace(&mut self.voice_call_request_timestamp, None);
-                    if let Some(ts) = ts {
-                        if response.req_timestamp != ts.get() {
-                            log::debug!("Possible encountering a voice call attack.");
-                        } else {
-                            if response.accepted {
-                                // The peer accepted the voice call.
-                                self.handler.on_voice_call_started();
-                                self.stop_voice_call_sender = self.start_voice_call();
-                            } else {
-                                // The peer refused the voice call.
-                                self.handler.on_voice_call_closed("");
-                            }
-                        }
-                    }
                 }
                 Some(message::Union::PeerInfo(pi)) => {
                     self.handler.set_displays(&pi.displays);
@@ -2696,6 +2616,15 @@ impl<T: InvokeUiSession> Remote<T> {
 
     #[inline(always)]
     fn update_privacy_mode(&mut self, impl_key: String, on: bool) {
+        {
+            let mut config = self.handler.lc.write().unwrap();
+            if config.rymu_privacy_enabled.is_some() {
+                config.set_rymu_privacy(on && impl_key == super::RYMU_PRIVACY_OVERLAY);
+                drop(config);
+                self.handler.update_privacy_mode();
+                return;
+            }
+        }
         let mut config = self.handler.load_config();
         config.privacy_mode.v = on;
         if on {
@@ -2736,8 +2665,10 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.update_privacy_mode(impl_key, false);
             }
             back_notification::PrivacyModeState::PrvOnSucceeded => {
-                self.handler
-                    .msgbox("custom-nocancel", "Privacy mode", "Enter privacy mode", "");
+                if impl_key != super::RYMU_PRIVACY_OVERLAY {
+                    self.handler
+                        .msgbox("custom-nocancel", "Privacy mode", "Enter privacy mode", "");
+                }
                 self.update_privacy_mode(impl_key, true);
             }
             back_notification::PrivacyModeState::PrvOnFailedDenied => {
@@ -2760,8 +2691,10 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.update_privacy_mode(impl_key, false);
             }
             back_notification::PrivacyModeState::PrvOffSucceeded => {
-                self.handler
-                    .msgbox("custom-nocancel", "Privacy mode", "Exit privacy mode", "");
+                if impl_key != super::RYMU_PRIVACY_OVERLAY {
+                    self.handler
+                        .msgbox("custom-nocancel", "Privacy mode", "Exit privacy mode", "");
+                }
                 self.update_privacy_mode(impl_key, false);
             }
             back_notification::PrivacyModeState::PrvOffByPeer => {
@@ -2780,6 +2713,9 @@ impl<T: InvokeUiSession> Remote<T> {
                     },
                     "",
                 );
+                if impl_key == super::RYMU_PRIVACY_OVERLAY {
+                    self.handler.update_privacy_mode();
+                }
             }
             back_notification::PrivacyModeState::PrvOffUnknown => {
                 self.handler
@@ -3204,10 +3140,33 @@ mod tests {
         Data::Message(msg)
     }
 
-    // A clipboard queued before this round's login stays here; what the login itself sends
-    // through the same queue does not.
     #[tokio::test]
-    async fn a_clipboard_queued_before_this_rounds_login_is_dropped() {
+    async fn rymu_privacy_is_acknowledged_without_replaying_a_saved_preference() {
+        let (mut remote, mut peer, mut far) = remote_and_peer().await;
+        {
+            let mut config = remote.handler.lc.write().unwrap();
+            config.version = hbb_common::get_version_number("1.5.1");
+            config.get_config().privacy_mode.v = true;
+            config.set_rymu_privacy(false);
+        }
+        assert!(!remote.handler.lc.read().unwrap().get_toggle_option("privacy-mode"));
+        remote.send_toggle_privacy_mode_msg(&mut peer).await;
+        assert!(!arrives(&mut far).await, "saved privacy was silently replayed");
+
+        remote.update_privacy_mode(super::super::RYMU_PRIVACY_OVERLAY.to_owned(), true);
+        {
+            let mut config = remote.handler.lc.write().unwrap();
+            config.get_config().privacy_mode.v = false;
+            assert!(config.get_toggle_option("privacy-mode"));
+            assert_eq!(config.get_option("privacy-mode-impl-key"), super::super::RYMU_PRIVACY_OVERLAY);
+            config.set_rymu_privacy(false);
+            assert!(!config.get_toggle_option("privacy-mode"));
+        }
+    }
+
+    // A transport login alone does not grant Rymu clipboard ownership.
+    #[tokio::test]
+    async fn clipboard_before_login_and_without_rymu_ownership_is_dropped() {
         let (mut remote, mut peer, mut far) = remote_and_peer().await;
         assert!(!remote.is_connected);
         assert!(remote.handle_msg_from_ui(clipboard(), &mut peer).await);
@@ -3221,8 +3180,8 @@ mod tests {
         remote.is_connected = true;
         assert!(remote.handle_msg_from_ui(clipboard(), &mut peer).await);
         assert!(
-            arrives(&mut far).await,
-            "a clipboard after the login was held back"
+            !arrives(&mut far).await,
+            "a transport-only login bypassed Rymu clipboard authorization"
         );
     }
 

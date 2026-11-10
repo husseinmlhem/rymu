@@ -771,31 +771,46 @@ impl TransferJob {
         }
     }
 
-    pub fn modify_time(&self) {
+    pub fn modify_time(&self) -> ResultType<()> {
         #[cfg(any(target_os = "android", all(test, unix)))]
         if self.is_document() {
-            return;
+            return Ok(());
         }
         if self.is_download() {
-            if let Err(err) = self.finish_download() {
-                log::error!("Failed to finish download {}: {}", self.id, err);
-            }
-            return;
+            return self.finish_download();
         }
-        if self.r#type == JobType::Printer {
-            return;
+        if self.r#type == JobType::Printer || self.data_stream.is_none() {
+            return Ok(());
         }
         if let DataSource::FilePath(p) = &self.data_source {
             let file_num = self.file_num as usize;
             if file_num < self.files.len() {
                 let entry = &self.files[file_num];
                 let Some(path) = self.resolve_entry_path(p, &entry.name) else {
-                    return;
+                    bail!("Invalid transfer destination");
                 };
                 let download_path = format!("{}.download", get_string(&path));
                 let digest_path = format!("{}.digest", get_string(&path));
+                #[cfg(windows)]
+                {
+                    use std::ffi::OsStr;
+                    use winapi::um::winbase::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+                    let from: Vec<u16> = OsStr::new(&download_path)
+                        .encode_wide()
+                        .chain([0])
+                        .collect();
+                    let to: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+                    // Host uploads cannot replace an existing entry, even if a
+                    // modified viewer sends data without a confirmation.
+                    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) }
+                        == 0
+                    {
+                        bail!("Could not publish the upload. Choose a new file name.");
+                    }
+                }
+                #[cfg(not(windows))]
+                std::fs::rename(download_path, &path)?;
                 std::fs::remove_file(digest_path).ok();
-                std::fs::rename(download_path, &path).ok();
                 filetime::set_file_mtime(
                     &path,
                     filetime::FileTime::from_unix_time(entry.modified_time as _, 0),
@@ -803,6 +818,7 @@ impl TransferJob {
                 .ok();
             }
         }
+        Ok(())
     }
 
     pub fn remove_download_file(&self) {
@@ -810,7 +826,7 @@ impl TransferJob {
         if self.is_document() {
             return;
         }
-        if self.is_download() && self.data_stream.is_none() {
+        if (self.is_download() || cfg!(windows)) && self.data_stream.is_none() {
             return;
         }
         if self.r#type == JobType::Printer {
@@ -862,10 +878,11 @@ impl TransferJob {
                     bail!("Wrong file number");
                 }
                 if file_num != self.file_num as usize || self.data_stream.is_none() {
-                    self.modify_time();
                     if let Some(DataStream::FileStream(file)) = self.data_stream.as_mut() {
                         file.sync_all().await?;
                     }
+                    self.modify_time()?;
+                    self.data_stream.take();
                     self.file_num = block.file_num;
                     let entry = &self.files[file_num];
                     let (path, digest_path) = if self.r#type == JobType::Printer {
@@ -890,8 +907,37 @@ impl TransferJob {
                             std::fs::remove_file(dp)?;
                         }
                     }
-                    self.data_stream = Some(DataStream::FileStream(File::create(&path).await?));
+                    #[cfg(windows)]
+                    let stream = if digest_path.is_some() {
+                        // An upload never opens or truncates a preexisting temporary
+                        // file. Windows must reject an alias at the actual open, not
+                        // merely when the transfer request is validated.
+                        OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .custom_flags(winapi::um::winbase::FILE_FLAG_OPEN_REPARSE_POINT)
+                            .open(&path)
+                            .await?
+                    } else {
+                        File::create(&path).await?
+                    };
+                    #[cfg(not(windows))]
+                    let stream = File::create(&path).await?;
+                    self.data_stream = Some(DataStream::FileStream(stream));
                     if let Some(dp) = digest_path.as_ref() {
+                        #[cfg(windows)]
+                        if let Ok(mut digest) = OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .custom_flags(winapi::um::winbase::FILE_FLAG_OPEN_REPARSE_POINT)
+                            .open(dp)
+                            .await
+                        {
+                            digest
+                                .write_all(json!(self.digest).to_string().as_bytes())
+                                .await?;
+                        }
+                        #[cfg(not(windows))]
                         std::fs::write(dp, json!(self.digest).to_string()).ok();
                     }
                 }
@@ -1241,9 +1287,12 @@ impl TransferJob {
             let digest_path = format!("{}.digest", &file_path);
 
             let mut f = if Path::new(&download_path).exists() && Path::new(&digest_path).exists() {
+                #[cfg(windows)]
+                return;
                 // If both download and digest files exist, seek (writer) to the offset
                 // NOTE: same as write path: best-effort symlink validation happened earlier,
                 // but this reopen remains TOCTOU-prone by design for now.
+                #[cfg(not(windows))]
                 match OpenOptions::new()
                     .create(true)
                     .write(true)
@@ -1289,7 +1338,8 @@ impl TransferJob {
         if self.is_download() {
             self.confirm_download(r);
             // Open receiver resume streams in write() so validation errors reach the caller.
-            if matches!(r.union, Some(file_transfer_send_confirm_request::Union::OffsetBlk(offset)) if offset > 0) {
+            if matches!(r.union, Some(file_transfer_send_confirm_request::Union::OffsetBlk(offset)) if offset > 0)
+            {
                 return true;
             }
         }

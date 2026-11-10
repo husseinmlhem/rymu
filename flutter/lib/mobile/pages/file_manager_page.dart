@@ -10,6 +10,8 @@ import 'package:toggle_switch/toggle_switch.dart';
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
 import '../../consts.dart';
+import '../../rymu/file_locations.dart';
+import '../../rymu_android/receiving_folder.dart';
 import '../../utils/android_documents.dart';
 
 class FileManagerPage extends StatefulWidget {
@@ -18,12 +20,14 @@ class FileManagerPage extends StatefulWidget {
       required this.id,
       this.password,
       this.isSharedPassword,
-      this.forceRelay})
+      this.forceRelay,
+      this.rymuArabic})
       : super(key: key);
   final String id;
   final String? password;
   final bool? isSharedPassword;
   final bool? forceRelay;
+  final bool? rymuArabic;
 
   @override
   State<StatefulWidget> createState() => _FileManagerPageState();
@@ -108,7 +112,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
           continue;
         }
         final destination =
-          PathUtil.join(importDirectory, name, importIsWindows);
+            PathUtil.join(importDirectory, name, importIsWindows);
         var overwrite = false;
         if (await File(destination).exists()) {
           final overwriteResult = await model.showFileConfirmDialog(
@@ -118,22 +122,19 @@ class _FileManagerPageState extends State<FileManagerPage> {
           overwrite = true;
         }
         try {
-          final success = await gFFI.invokeMethod(
-              AndroidChannel.kImportFile,
+          final success = await gFFI.invokeMethod(AndroidChannel.kImportFile,
               {'uri': uri, 'path': destination, 'overwrite': overwrite});
           if (success == true) {
             imported++;
           } else {
             failed = true;
           }
-        } catch (e) {
+        } catch (_) {
           failed = true;
-          debugPrint('Failed to import $name: $e');
         }
       }
-    } catch (e) {
+    } catch (_) {
       failed = true;
-      debugPrint('Failed to select files for import: $e');
     }
     await importController.refresh();
     if (failed) {
@@ -151,8 +152,10 @@ class _FileManagerPageState extends State<FileManagerPage> {
       if (path == null || !mounted) return;
       final previousHome = model.localController.homePath;
       model.localController.homePath = path;
+      var opened = false;
       try {
-        if (await model.localController.openDirectory(path, isBack: true)) {
+        opened = await model.localController.openDirectory(path, isBack: true);
+        if (opened) {
           model.localController.history.clear();
         } else {
           model.localController.homePath = previousHome;
@@ -161,6 +164,13 @@ class _FileManagerPageState extends State<FileManagerPage> {
         model.localController.homePath = previousHome;
         rethrow;
       }
+      if (opened && widget.rymuArabic != null) {
+        if (workspace) {
+          await RymuReceivingFolder.useWorkspace();
+        } else {
+          await RymuReceivingFolder.remember(path);
+        }
+      }
     } catch (error) {
       showToast(error.toString());
     }
@@ -168,13 +178,12 @@ class _FileManagerPageState extends State<FileManagerPage> {
 
   Future<void> _exportFile(Entry entry) async {
     try {
-      final exported = await _runAndroidDocumentPicker(() => gFFI
-          .invokeMethod(AndroidChannel.kExportFile, {'path': entry.path}));
+      final exported = await _runAndroidDocumentPicker(() =>
+          gFFI.invokeMethod(AndroidChannel.kExportFile, {'path': entry.path}));
       if (exported == true) {
         showToast(translate('Successful'));
       }
-    } catch (e) {
-      debugPrint('Failed to export ${entry.name}: $e');
+    } catch (_) {
       showToast(translate('Failed'));
     }
   }
@@ -218,8 +227,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
       } else {
         showToast(translate('Failed'));
       }
-    } catch (e) {
-      debugPrint('Failed to import folder: $e');
+    } catch (_) {
       showToast(translate('Failed'));
     }
     await importController.refresh();
@@ -265,8 +273,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
       } else if (exported > 0) {
         showToast(translate('Successful'));
       }
-    } catch (e) {
-      debugPrint('Failed to export paths: $e');
+    } catch (_) {
       showToast(translate('Failed'));
     }
   }
@@ -274,6 +281,10 @@ class _FileManagerPageState extends State<FileManagerPage> {
   @override
   void initState() {
     super.initState();
+    model.localController.startingDirectory = isAndroid && widget.rymuArabic != null
+        ? RymuReceivingFolder.resolve : null;
+    model.remoteController.startingDirectory = widget.rymuArabic != null
+        ? () => rymuTransferFolderPath(model.remoteController) : null;
     gFFI.start(widget.id,
         isFileTransfer: true,
         password: widget.password,
@@ -299,15 +310,19 @@ class _FileManagerPageState extends State<FileManagerPage> {
   }
 
   @override
-  Widget build(BuildContext context) => WillPopScope(
-      onWillPop: () async {
+  Widget build(BuildContext context) => PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
         if (selectMode.value != SelectMode.none) {
           selectMode.value = SelectMode.none;
           setState(() {});
+        } else if (widget.rymuArabic != null &&
+            currentFileController.history.isEmpty) {
+          closeConnection();
         } else {
           currentFileController.goBack();
         }
-        return false;
       },
       child: Scaffold(
         // backgroundColor: MyTheme.grayBg,
@@ -328,7 +343,10 @@ class _FileManagerPageState extends State<FileManagerPage> {
                 ? Colors.black54
                 : null,
             totalSwitches: 2,
-            minWidth: 100,
+            minWidth: widget.rymuArabic == null
+                ? 100
+                : ((MediaQuery.sizeOf(context).width - 184) / 2)
+                    .clamp(48.0, 100.0).toDouble(),
             fontSize: 15,
             iconSize: 18,
             labels: [translate("Local"), translate("Remote")],
@@ -341,11 +359,40 @@ class _FileManagerPageState extends State<FileManagerPage> {
             },
           ),
           actions: [
+            if (widget.rymuArabic != null)
+              IconButton(
+                tooltip: widget.rymuArabic! ? 'مجلد النقل' : 'Transfer folder',
+                icon: const Icon(Icons.drive_file_move_outline),
+                onPressed: () async {
+                  if (!showLocal) {
+                    await openRymuTransferFolder(context, model.remoteController,
+                        arabic: widget.rymuArabic!);
+                    return;
+                  }
+                  try {
+                    final destination = await RymuReceivingFolder.resolve();
+                    if (!mounted) return;
+                    final previousHome = model.localController.homePath;
+                    model.localController.homePath = destination;
+                    if (!await model.localController.openDirectory(destination, isBack: true)) {
+                      model.localController.homePath = previousHome;
+                      showToast(widget.rymuArabic! ? 'تعذّر فتح المجلد. اختر المجلد مجدداً.' : 'Folder unavailable. Choose the folder again.');
+                    }
+                  } catch (_) {
+                    showToast(widget.rymuArabic! ? 'تعذّر فتح مجلد النقل' : 'Could not open the transfer folder');
+                  }
+                },
+              ),
             PopupMenuButton<String>(
                 tooltip: "",
                 icon: Icon(Icons.more_vert),
                 itemBuilder: (context) {
                   return [
+                    if (!showLocal && widget.rymuArabic != null)
+                      PopupMenuItem(
+                        value: 'rymu_locations',
+                        child: Text(widget.rymuArabic! ? 'مواقع ويندوز والأقراص' : 'Windows locations and drives'),
+                      ),
                     if (isAndroid && showLocal) ...[
                       PopupMenuItem(
                         value: 'workspace',
@@ -354,7 +401,11 @@ class _FileManagerPageState extends State<FileManagerPage> {
                             Icon(Icons.storage_outlined,
                                 color: Theme.of(context).iconTheme.color),
                             SizedBox(width: 5),
-                            Text(translate('RustDesk storage')),
+                            Text(widget.rymuArabic == null
+                                ? translate('RustDesk storage')
+                                : widget.rymuArabic!
+                                    ? 'مساحة ريمو'
+                                    : 'Rymu workspace'),
                           ],
                         ),
                       ),
@@ -365,7 +416,9 @@ class _FileManagerPageState extends State<FileManagerPage> {
                             Icon(Icons.folder_open_outlined,
                                 color: Theme.of(context).iconTheme.color),
                             SizedBox(width: 5),
-                            Text('${translate('Other folders')}…'),
+                            Text(widget.rymuArabic == null
+                                ? '${translate('Other folders')}…'
+                                : widget.rymuArabic! ? 'تغيير مجلد الاستلام…' : 'Change receiving folder…'),
                           ],
                         ),
                       ),
@@ -408,7 +461,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
                           ],
                         ),
                       ),
-                    if (isAndroid)
+                    if (isAndroid && widget.rymuArabic == null)
                       PopupMenuItem(
                         enabled: showLocal && currentDir.path.isNotEmpty,
                         value: "export_logs",
@@ -463,7 +516,10 @@ class _FileManagerPageState extends State<FileManagerPage> {
                   ];
                 },
                 onSelected: (v) {
-                  if (v == 'workspace' || v == 'choose_folder') {
+                  if (v == 'rymu_locations') {
+                    showRymuWindowsLocations(context, currentFileController,
+                        arabic: widget.rymuArabic);
+                  } else if (v == 'workspace' || v == 'choose_folder') {
                     _changeLocalStorage(workspace: v == 'workspace');
                   } else if (v == "refresh") {
                     currentFileController.refresh();
@@ -575,18 +631,17 @@ class _FileManagerPageState extends State<FileManagerPage> {
                     selectedItems?.isLocal == true &&
                     selectedItems?.items.isNotEmpty == true) ...[
                   if (selectedItems!.items.length == 1 &&
-                      selectedItems!.items.single.isFile)
+                      selectedItems.items.single.isFile)
                     IconButton(
                       tooltip: translate("Save as"),
                       icon: Icon(Icons.save_alt),
-                      onPressed: () =>
-                          _exportFile(selectedItems!.items.single),
+                      onPressed: () => _exportFile(selectedItems.items.single),
                     )
                   else
                     IconButton(
                       tooltip: translate("Export"),
                       icon: Icon(Icons.drive_folder_upload),
-                      onPressed: () => _exportItems(selectedItems!),
+                      onPressed: () => _exportItems(selectedItems),
                     ),
                 ],
                 IconButton(
@@ -777,7 +832,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                             ? Icons.feed_outlined
                             : Icons.folder,
                         size: 40),
-                title: Text(entries[index].name),
+                title:
+                    Text(entries[index].name, textDirection: TextDirection.ltr),
                 selected: selected,
                 subtitle: entries[index].isDrive
                     ? null
@@ -984,9 +1040,9 @@ class _FileManagerViewState extends State<FileManagerView> {
     ];
     breadCrumbList.addAll(list.asMap().entries.map((e) => BreadCrumbItem(
         content: TextButton(
-            child: Text(e.value),
-            style:
-                ButtonStyle(minimumSize: MaterialStateProperty.all(Size(0, 0))),
+            child: Text(e.value, textDirection: TextDirection.ltr),
+            style: const ButtonStyle(
+                minimumSize: WidgetStatePropertyAll(Size(0, 0))),
             onPressed: () => onPressed(list.sublist(0, e.key + 1))))));
     return breadCrumbList;
   }

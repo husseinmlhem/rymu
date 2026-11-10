@@ -74,7 +74,8 @@ Widget waylandKeyboardScopeChip(BuildContext context, String text) {
 }
 
 bool _isWindowsMode1PrivacyImpl(String privacyModeImpl) {
-  return privacyModeImpl == kPrivacyModeImplMag ||
+  return privacyModeImpl == 'rymu_privacy_overlay' ||
+      privacyModeImpl == kPrivacyModeImplMag ||
       privacyModeImpl == kPrivacyModeImplExcludeFromCapture;
 }
 
@@ -838,35 +839,27 @@ Future<List<TRadioMenu<String>>> toolbarImageQuality(
     if (value == null) return;
     await bind.sessionSetImageQuality(sessionId: ffi.sessionId, value: value);
   }
+  final ar = Directionality.of(context) == TextDirection.rtl;
 
   return _registerRadioMenuShortcuts(ffi, [
     TRadioMenu<String>(
-        child: Text(translate('Good image quality')),
+        child: Text(ar ? 'جودة عالية' : 'High Quality'),
         value: kRemoteImageQualityBest,
         groupValue: groupValue,
         onChanged: onChanged,
         actionId: kShortcutActionImageQualityBest),
     TRadioMenu<String>(
-        child: Text(translate('Balanced')),
+        child: Text(ar ? 'تلقائية' : 'Auto'),
         value: kRemoteImageQualityBalanced,
         groupValue: groupValue,
         onChanged: onChanged,
         actionId: kShortcutActionImageQualityBalanced),
     TRadioMenu<String>(
-        child: Text(translate('Optimize reaction time')),
+        child: Text(ar ? 'توفير البيانات' : 'Data Saver'),
         value: kRemoteImageQualityLow,
         groupValue: groupValue,
         onChanged: onChanged,
         actionId: kShortcutActionImageQualityLow),
-    TRadioMenu<String>(
-      child: Text(translate('Custom')),
-      value: kRemoteImageQualityCustom,
-      groupValue: groupValue,
-      onChanged: (value) {
-        onChanged(value);
-        customImageQualityDialog(ffi.sessionId, id, ffi);
-      },
-    ),
   ], ownedActionIds: _kToolbarImageQualityActionIds);
 }
 
@@ -1069,19 +1062,18 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
         ffi.qualityMonitorModel.checkShowQualityMonitor(sessionId);
       },
       child: Text(translate('Show quality monitor'))));
-  // mute
-  if (isDefaultConn && perms['audio'] != false) {
+  if (isDesktop && isDefaultConn && perms['audio'] == true) {
     final option = 'disable-audio';
     final value =
         bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option);
     v.add(TToggleMenu(
-        value: value,
+        value: !value,
         actionId: kShortcutActionToggleMute,
         onChanged: (value) {
           if (value == null) return;
           bind.sessionToggleOption(sessionId: sessionId, value: option);
         },
-        child: Text(translate('Mute'))));
+        child: Text(translate('Computer audio'))));
   }
   // file copy and paste
   // If the version is less than 1.2.4, file copy and paste is supported on Windows only.
@@ -1264,7 +1256,11 @@ List<TToggleMenu> toolbarPrivacyMode(
                 toggleFunc(sessionId, option);
               }
             : null,
-        child: Text(translate('Privacy mode')));
+        child: Text(targetImplKey == 'rymu_privacy_overlay'
+            ? Directionality.of(context) == TextDirection.rtl
+                ? 'خصوصية الشاشة'
+                : 'Screen privacy'
+            : translate('Privacy mode')));
   }
 
   final privacyModeImpls =

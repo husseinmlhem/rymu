@@ -22,6 +22,7 @@ import 'package:bot_toast/bot_toast.dart';
 
 import '../../common/widgets/dialog.dart';
 import '../../models/platform_model.dart';
+import '../../rymu/glass.dart';
 
 class _MenuTheme {
   static const Color blueColor = MyTheme.button;
@@ -130,8 +131,10 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = RymuGlassPalette.of(context);
     final child = Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor:
+          isWindows ? palette.canvas : Theme.of(context).colorScheme.background,
       body: DesktopTab(
         controller: tabController,
         onWindowCloseButton: handleWindowCloseButton,
@@ -142,7 +145,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
             const AddButton(),
           ],
         ),
-        selectedBorderColor: MyTheme.accent,
+        selectedBorderColor: isWindows ? palette.action : MyTheme.accent,
         pageViewBuilder: (pageView) => pageView,
         labelGetter: DesktopTab.tablabelGetter,
         tabBuilder: (key, icon, label, themeConf) => Obx(() {
@@ -185,6 +188,9 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
                     'assets/${connectionType.secure.value}${connectionType.direct.value}.svg',
                     width: themeConf.iconSize,
                     height: themeConf.iconSize,
+                    colorFilter: isWindows && secure
+                        ? ColorFilter.mode(palette.ink, BlendMode.srcIn)
+                        : null,
                   ).paddingOnly(right: 5),
                 ),
                 label,
@@ -223,7 +229,9 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
             Obx(() => Container(
                   decoration: BoxDecoration(
                     border: Border.all(
-                        color: MyTheme.color(context).border!,
+                        color: isWindows
+                            ? palette.line
+                            : MyTheme.color(context).border!,
                         width: stateGlobal.windowBorderWidth.value),
                   ),
                   child: child,

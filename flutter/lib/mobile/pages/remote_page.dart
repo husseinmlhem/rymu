@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
@@ -15,6 +16,13 @@ import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
 import '../../common.dart';
+import '../../rymu/glass.dart';
+import '../../rymu_android/appearance.dart';
+import '../../rymu_android/monitor_overview.dart';
+import '../../rymu_android/remote_keyboard.dart';
+import '../../rymu_android/screen_privacy.dart';
+import '../../rymu_android/session_bar.dart';
+import '../../rymu_android/touch_surface.dart';
 import '../../common/widgets/overlay.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/remote_input.dart';
@@ -73,13 +81,23 @@ class RemotePage extends StatefulWidget {
       required this.id,
       this.password,
       this.isSharedPassword,
-      this.forceRelay})
+      this.forceRelay,
+      this.rymuName,
+      this.rymuHostId,
+      this.rymuArabic = false,
+      this.rymuViewOnly = false,
+      this.rymuRestage})
       : super(key: key);
 
   final String id;
   final String? password;
   final bool? isSharedPassword;
   final bool? forceRelay;
+  final String? rymuName;
+  final String? rymuHostId;
+  final bool rymuArabic;
+  final bool rymuViewOnly;
+  final Future<bool> Function()? rymuRestage;
 
   @override
   State<RemotePage> createState() => _RemotePageState(id);
@@ -91,6 +109,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
+  Timer? _viewportResizeTimer;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
 
@@ -104,6 +123,55 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Worker? _waylandKeyboardGateWorker;
   bool _waylandKeyboardGateInitialized = false;
+  bool _rymuClipboardEnabled = false;
+  String _rymuLanguage = 'auto';
+  String _rymuQuality = kRemoteImageQualityBalanced;
+  final _rymuKeys = RymuRemoteKeys();
+  var _rymuMoreKeys = false;
+  var _rymuImeVisible = false;
+  var _rymuEditorFocused = false;
+  var _rymuKeyboardRequest = 0;
+  var _rymuInputEpoch = 0;
+  var _rymuClosing = false;
+  var _rymuForeground = true;
+  Worker? _rymuSessionStateWorker;
+  Future<void> _rymuInputQueue = Future.value();
+  Set<int>? _rymuIncludedScreens;
+  List<Rect> _rymuScreenTopology = const [];
+  RymuMonitorOverview? _rymuOverview;
+  Completer<bool>? _rymuPrivacyReply;
+
+  bool get _rymu => isAndroid && widget.rymuName != null;
+  bool get _rymuReady =>
+      gFFI.ffiModel.pi.isSet.isTrue && gFFI.ffiModel.waitForFirstImage.isFalse;
+  bool get _rymuCanInput =>
+      _rymuReady &&
+      _rymuForeground &&
+      !_rymuClosing &&
+      _rymuPrivacyReply == null &&
+      !widget.rymuViewOnly &&
+      !gFFI.ffiModel.viewOnly &&
+      gFFI.ffiModel.keyboard &&
+      inputModel.keyboardInputAllowed;
+  String get _rymuPreferenceKey => widget.rymuHostId ?? widget.id;
+  String? get _rymuHostLocale {
+    final value = gFFI.ffiModel.pi.platformAdditions['rymu_ui_locale'];
+    return value is String
+        ? value.split(RegExp('[-_]')).first.toLowerCase()
+        : null;
+  }
+
+  bool get _rymuArabic => switch (_rymuLanguage) {
+        'ar' => true,
+        'en' => false,
+        _ => switch (_rymuHostLocale) {
+            'ar' => true,
+            'en' => false,
+            _ => widget.rymuArabic,
+          },
+      };
+  String _rymuText(String english, String arabic) =>
+      rymuCopy(_rymuArabic, english, arabic);
 
   InputModel get inputModel => gFFI.inputModel;
   SessionID get sessionId => gFFI.sessionId;
@@ -120,6 +188,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    if (_rymu) {
+      gFFI.ffiModel.setRymuReconnectHandler(widget.rymuRestage);
+      gFFI.ffiModel.onRymuPrivacyUpdate = _onRymuPrivacyUpdate;
+      PrivacyModeState.find(widget.id).value = '';
+      _textController.addListener(_onRymuImeEdit);
+      _mobileFocusNode.addListener(_onRymuEditorFocus);
+      gFFI.ffiModel.addListener(_onRymuSessionState);
+      _rymuSessionStateWorker = everAll(
+          [gFFI.ffiModel.pi.isSet, gFFI.ffiModel.waitForFirstImage],
+          (_) => _onRymuSessionState());
+      final saved = bind.mainGetLocalOption(
+          key: 'rymu-session-language-$_rymuPreferenceKey');
+      if (saved == 'ar' || saved == 'en') _rymuLanguage = saved;
+    }
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
     gFFI.start(
       widget.id,
@@ -143,6 +225,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
     _blockableOverlayState.applyFfi(gFFI);
     gFFI.imageModel.addCallbackOnFirstImage((String peerId) {
+      if (_rymu) {
+        unawaited(_prepareRymuSession());
+        return;
+      }
       gFFI.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: gFFI.sessionId));
       if (gFFI.recordingModel.start) {
@@ -183,8 +269,24 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   Future<void> dispose() async {
+    _viewportResizeTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
+    if (_rymu) {
+      _rymuClosing = true;
+      _clearRymuOverview();
+      gFFI.canvasModel.rymuMobileViewport = null;
+      _rymuKeys.clear();
+      _textController.removeListener(_onRymuImeEdit);
+      _mobileFocusNode.removeListener(_onRymuEditorFocus);
+      gFFI.ffiModel.removeListener(_onRymuSessionState);
+      gFFI.ffiModel.onRymuPrivacyUpdate = null;
+      _cancelRymuPrivacyRequest();
+      _rymuSessionStateWorker?.dispose();
+      gFFI.ffiModel.setRymuReconnectHandler(null);
+      inputModel.enterOrLeave(false);
+      unawaited(gFFI.invokeMethod('rymu_clipboard_active', false));
+    }
     // Close the session up-front. `gFFI.close()` below only calls `sessionClose`
     // after several awaits (canvas save, image update, the `enable_soft_keyboard`
     // platform call), so if the app is backgrounded while this page is disposing,
@@ -202,6 +304,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     await gFFI.invokeMethod("enable_soft_keyboard", true);
     _mobileFocusNode.dispose();
     _physicalFocusNode.dispose();
+    _textController.dispose();
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
     inputModel.keyboardInputAllowed = true;
@@ -222,6 +325,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_rymu) {
+      final foreground = state == AppLifecycleState.resumed;
+      if (!mounted || foreground == _rymuForeground) return;
+      setState(() => _rymuForeground = foreground);
+      if (!_rymuForeground) {
+        _hideRymuKeyboard(restoreFocus: false);
+        inputModel.enterOrLeave(false);
+      }
+      return;
+    }
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
     }
@@ -231,6 +344,44 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   // When swithing from other app to this app, try to sync clipboard.
   void trySyncClipboard() {
     gFFI.invokeMethod("try_sync_clipboard");
+  }
+
+  Future<void> _prepareRymuSession() async {
+    if (!mounted) return;
+    final preferences = 'rymu-touch-$_rymuPreferenceKey';
+    final touch = bind.mainGetLocalOption(key: preferences) != 'mouse';
+    if (gFFI.ffiModel.touchMode != touch) gFFI.ffiModel.toggleTouchMode();
+    await bind.mainSetLocalOption(
+        key: kCommConfKeyLang, value: _rymuArabic ? 'ar' : 'en');
+    if (!mounted) return;
+    await bind.sessionSetKeyboardMode(sessionId: sessionId, value: kKeyMapMode);
+    if (!mounted) return;
+    inputModel.keyboardMode =
+        await bind.sessionGetKeyboardMode(sessionId: sessionId) ??
+            kKeyLegacyMode;
+    final quality = await bind.sessionGetImageQuality(sessionId: sessionId);
+    if (quality == kRemoteImageQualityLow ||
+        quality == kRemoteImageQualityBest) {
+      _rymuQuality = quality!;
+    } else {
+      await bind.sessionSetImageQuality(
+          sessionId: sessionId, value: _rymuQuality);
+    }
+    if (!mounted) return;
+    await _setRymuClipboard(false);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _setRymuClipboard(bool enabled) async {
+    final disabled = bind.sessionGetToggleOptionSync(
+            sessionId: sessionId, arg: kOptionDisableClipboard) ==
+        true;
+    if (disabled == enabled) {
+      await bind.sessionToggleOption(
+          sessionId: sessionId, value: kOptionDisableClipboard);
+    }
+    if (mounted) await gFFI.invokeMethod('rymu_clipboard_active', enabled);
+    if (mounted) setState(() => _rymuClipboardEnabled = enabled);
   }
 
   bool _shouldGateKeyboardForWayland() {
@@ -281,6 +432,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (!mounted) return;
+    if (_rymu) {
+      if (!_showEdit) return;
+      if (visible) {
+        _rymuImeVisible = true;
+      } else if (_rymuImeVisible) {
+        _hideRymuKeyboard();
+      }
+      return;
+    }
     if (!visible) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
@@ -315,6 +476,163 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
     // update for Scaffold
     setState(() {});
+  }
+
+  void _onRymuSessionState() {
+    if (mounted && !_rymuCanInput) _hideRymuKeyboard(restoreFocus: false);
+    if (!_rymuReady) _cancelRymuPrivacyRequest();
+    final overview = _rymuOverview;
+    if (overview != null &&
+        (!_rymuReady || !listEquals(overview.displays, _screenTopology(gFFI.ffiModel.pi)))) {
+      _clearRymuOverview();
+      if (mounted) setState(() {});
+      final peer = gFFI.ffiModel.pi;
+      if (_rymuReady && peer.displays.isNotEmpty) {
+        _switchRymuDisplay(peer, 0);
+      }
+    }
+  }
+
+  bool get _rymuPrivacyActive => _rymuReady &&
+      PrivacyModeState.find(widget.id).value == rymuPrivacyOverlay;
+
+  bool get _rymuPrivacyAvailable {
+    final peer = gFFI.ffiModel.pi;
+    final implementations =
+        peer.platformAdditions[kPlatformAdditionsSupportedPrivacyModeImpl];
+    return _rymuCanInput &&
+        peer.features.privacyMode &&
+        gFFI.ffiModel.permissions['privacy_mode'] == true &&
+        implementations is List &&
+        implementations.any((entry) =>
+            entry is List && entry.isNotEmpty && entry.first == rymuPrivacyOverlay);
+  }
+
+  void _onRymuPrivacyUpdate() {
+    final reply = _rymuPrivacyReply;
+    if (reply != null && !reply.isCompleted) {
+      reply.complete(_rymuPrivacyActive);
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _cancelRymuPrivacyRequest() {
+    final reply = _rymuPrivacyReply;
+    if (reply != null && !reply.isCompleted) {
+      reply.completeError(StateError('Session disconnected'));
+    }
+  }
+
+  Future<bool> _setRymuPrivacy(bool enabled) async {
+    if (_rymuPrivacyReply != null || !_rymuReady ||
+        (enabled && !_rymuPrivacyAvailable)) {
+      throw StateError('Screen privacy is unavailable');
+    }
+    final reply = Completer<bool>();
+    setState(() => _rymuPrivacyReply = reply);
+    // Register the timeout before sending so a synchronous disconnect is handled.
+    final result = reply.future.timeout(const Duration(seconds: 10));
+    try {
+      final results = await Future.wait<dynamic>([
+        bind.sessionTogglePrivacyMode(
+            sessionId: sessionId, implKey: rymuPrivacyOverlay, on: enabled),
+        result,
+      ], eagerError: true);
+      final confirmed = results.last as bool;
+      if (!enabled && !confirmed && mounted && _rymuReady && !_rymuClosing) {
+        gFFI.ffiModel.setRymuReconnectHandler(widget.rymuRestage);
+      }
+      return confirmed;
+    } finally {
+      if (identical(_rymuPrivacyReply, reply)) {
+        _rymuPrivacyReply = null;
+        if (mounted) setState(() {});
+      }
+    }
+  }
+
+  void _onRymuEditorFocus() {
+    if (!_showEdit) return;
+    if (_mobileFocusNode.hasFocus) {
+      _rymuEditorFocused = true;
+    } else if (_rymuEditorFocused) {
+      _hideRymuKeyboard(restoreFocus: false);
+    }
+  }
+
+  Future<void> _openRymuKeyboard() async {
+    if (!_rymuCanInput || _showEdit) return;
+    final request = ++_rymuKeyboardRequest;
+    await gFFI.invokeMethod('enable_soft_keyboard', true);
+    if (!mounted || request != _rymuKeyboardRequest || !_rymuCanInput) return;
+    _rymuKeys.clear();
+    _textController.value = RymuRemoteKeys.editorValue;
+    setState(() => _showEdit = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_showEdit || request != _rymuKeyboardRequest) return;
+      _mobileFocusNode.requestFocus();
+    });
+  }
+
+  void _hideRymuKeyboard({bool restoreFocus = true}) {
+    _rymuKeyboardRequest++;
+    if (!restoreFocus) _rymuInputEpoch++;
+    _rymuKeys.clear();
+    _rymuImeVisible = false;
+    _rymuEditorFocused = false;
+    if (!_showEdit || !mounted) return;
+    setState(() {
+      _showEdit = false;
+      _rymuMoreKeys = false;
+    });
+    _mobileFocusNode.unfocus();
+    unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
+    unawaited(gFFI.invokeMethod('enable_soft_keyboard', false));
+    if (restoreFocus) _physicalFocusNode.requestFocus();
+  }
+
+  void _onRymuImeEdit() {
+    if (!_showEdit || !_mobileFocusNode.hasFocus || !_rymuCanInput) return;
+    final edit = _rymuKeys.commit(_textController.value);
+    if (edit == null) return;
+    _textController.value = RymuRemoteKeys.editorValue;
+    _sendRymuKeyboardInput(edit);
+  }
+
+  void _sendRymuKeyboardInput(RymuKeyboardInput event) {
+    if (!_rymuCanInput) return;
+    setState(() {});
+    final activeSession = sessionId;
+    final epoch = _rymuInputEpoch;
+    final alt = inputModel.alt;
+    final ctrl = inputModel.ctrl;
+    final shift = inputModel.shift;
+    final command = inputModel.command;
+    _rymuInputQueue = _rymuInputQueue.then((_) async {
+      if (!mounted ||
+          !_rymuCanInput ||
+          activeSession != sessionId ||
+          epoch != _rymuInputEpoch) {
+        return;
+      }
+      switch (event) {
+        case RymuKeyStroke(:final key, :final modifiers):
+          await bind.sessionInputKey(
+            sessionId: activeSession,
+            name: key,
+            down: false,
+            press: true,
+            alt: modifiers.contains(RymuModifier.alt) || alt,
+            ctrl: modifiers.contains(RymuModifier.control) || ctrl,
+            shift: modifiers.contains(RymuModifier.shift) || shift,
+            command: modifiers.contains(RymuModifier.windows) || command,
+          );
+        case RymuCommittedText(:final text):
+          await bind.sessionInputString(sessionId: activeSession, value: text);
+      }
+    }).catchError((Object _) {
+      debugPrint('Rymu session keyboard input could not be sent.');
+    });
   }
 
   void _handleIOSSoftKeyboardInput(String newValue) {
@@ -485,16 +803,111 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           ? getBottomAppBar()
           : Offstage());
 
+  Widget _viewerBody() {
+    final canvasColor =
+        _rymu ? RymuGlassPalette.of(context).canvas : MyTheme.canvasColor;
+    final canvas = Overlay(
+      key: _rymu ? ObjectKey(_rymuOverview) : null,
+      initialEntries: [
+        OverlayEntry(builder: (context) {
+          return ColoredBox(
+            color: _rymu ? canvasColor : kColorCanvas,
+            child: isWebDesktop
+                ? getBodyForDesktopWithListener()
+                : SafeArea(
+                    child: LayoutBuilder(builder: (context, constraints) {
+                      final orientation =
+                          constraints.maxWidth > constraints.maxHeight
+                              ? Orientation.landscape
+                              : Orientation.portrait;
+                      if (_rymu) {
+                        return RymuTouchSurface(
+                          ffi: gFFI,
+                          overview: _rymuOverview,
+                          canControl: () => mounted && _rymuCanInput,
+                          child: getBodyForMobile(),
+                        );
+                      }
+                      if (orientation != _currentOrientation) {
+                        _currentOrientation = orientation;
+                        _viewportResizeTimer?.cancel();
+                        _viewportResizeTimer =
+                            Timer(const Duration(milliseconds: 200), () {
+                          if (!mounted || _rymuClosing) return;
+                          gFFI.dialogManager
+                              .resetMobileActionsOverlay(ffi: gFFI);
+                          gFFI.canvasModel.updateViewStyle();
+                        });
+                      }
+                      return ColoredBox(
+                        color: canvasColor,
+                        child: inputModel.isPhysicalMouse.value
+                            ? getBodyForMobile()
+                            : RawTouchGestureDetectorRegion(
+                                child: getBodyForMobile(), ffi: gFFI),
+                      );
+                    }),
+                  ),
+          );
+        }),
+      ],
+    );
+    if (!_rymu) return canvas;
+
+    // Keep the editor outside the legacy OverlayEntry so opening Text
+    // reliably attaches the Android text input connection on the next frame.
+    return Stack(fit: StackFit.expand, children: [
+      canvas,
+      if (_showEdit)
+        Positioned(
+          bottom: 0,
+          left: 0,
+          width: 1,
+          height: 1,
+          child: ExcludeSemantics(
+            child: IgnorePointer(
+              child: Opacity(
+                opacity: 0,
+                child: TextField(
+                  controller: _textController,
+                  focusNode: _mobileFocusNode,
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: TextInputAction.newline,
+                  maxLines: null,
+                  autocorrect: false,
+                  onTapOutside: (_) {},
+                ),
+              ),
+            ),
+          ),
+        ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final keyboardIsVisible =
         keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+    final showActionButton =
+        !_rymu && (!_showBar || keyboardIsVisible || _showGestureHelp);
+    final viewer = Obx(() {
+      final ready = gFFI.ffiModel.pi.isSet.isTrue;
+      return getRawPointerAndKeyBody(_viewerBody(), ready: ready);
+    });
 
-    return WillPopScope(
-      onWillPop: () async {
-        clientClose(sessionId, gFFI);
-        return false;
+    return PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_rymu) {
+          if (_showEdit) {
+            _hideRymuKeyboard();
+          } else {
+            _closeRymuSession();
+          }
+        } else {
+          clientClose(sessionId, gFFI);
+        }
       },
       child: Scaffold(
           // workaround for https://github.com/rustdesk/rustdesk/issues/3131
@@ -526,71 +939,87 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       }
                     });
                   }),
-          bottomNavigationBar: Obx(() => Stack(
-                alignment: Alignment.bottomCenter,
-                children: [
-                  gFFI.ffiModel.pi.isSet.isTrue &&
-                          gFFI.ffiModel.waitForFirstImage.isTrue
-                      ? emptyOverlay(MyTheme.canvasColor)
-                      : () {
-                          gFFI.ffiModel.tryShowAndroidActionsOverlay();
-                          return Offstage();
-                        }(),
-                  _bottomWidget(),
-                  gFFI.ffiModel.pi.isSet.isFalse
-                      ? emptyOverlay(MyTheme.canvasColor)
-                      : Offstage(),
-                ],
-              )),
-          body: Obx(
-            () => getRawPointerAndKeyBody(Overlay(
-              initialEntries: [
-                OverlayEntry(builder: (context) {
-                  return Container(
-                    color: kColorCanvas,
-                    child: isWebDesktop
-                        ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
-                              if (_currentOrientation != orientation) {
-                                Timer(const Duration(milliseconds: 200), () {
-                                  gFFI.dialogManager
-                                      .resetMobileActionsOverlay(ffi: gFFI);
-                                  _currentOrientation = orientation;
-                                  gFFI.canvasModel.updateViewStyle();
-                                });
-                              }
-                              return Container(
-                                color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
-                              );
-                            }),
-                          ),
-                  );
-                })
-              ],
-            )),
-          )),
+          bottomNavigationBar: _rymu
+              ? (_showEdit
+                  ? null
+                  : ListenableBuilder(
+                      listenable: gFFI.ffiModel,
+                      builder: (context, _) => Obx(_rymuSessionBar),
+                    ))
+              : Obx(() => Stack(
+                    alignment: Alignment.bottomCenter,
+                    children: [
+                      gFFI.ffiModel.pi.isSet.isTrue &&
+                              gFFI.ffiModel.waitForFirstImage.isTrue
+                          ? emptyOverlay(MyTheme.canvasColor)
+                          : () {
+                              gFFI.ffiModel.tryShowAndroidActionsOverlay();
+                              return Offstage();
+                            }(),
+                      _bottomWidget(),
+                      gFFI.ffiModel.pi.isSet.isFalse
+                          ? emptyOverlay(MyTheme.canvasColor)
+                          : Offstage(),
+                    ],
+                  )),
+          body: _rymu
+              ? Column(children: [
+                  Obx(() => _rymuPrivacyActive || _rymuPrivacyReply != null
+                      ? RymuScreenPrivacyStatus(
+                          arabic: _rymuArabic,
+                          pending: _rymuPrivacyReply != null,
+                          onDisconnect: _closeRymuSession,
+                        )
+                      : const SizedBox.shrink()),
+                  Expanded(child: viewer),
+                  if (_showEdit)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: RymuRemoteKeyboard(
+                        arabic: _rymuArabic,
+                        expanded: _rymuMoreKeys,
+                        keys: _rymuKeys,
+                        onModifier: (modifier) {
+                          if (_rymuCanInput) {
+                            setState(() => _rymuKeys.toggle(modifier));
+                          }
+                        },
+                        onKey: (key, modifiers) => _sendRymuKeyboardInput(
+                            _rymuKeys.stroke(key, modifiers)),
+                        onExpand: () {
+                          setState(() => _rymuMoreKeys = !_rymuMoreKeys);
+                        },
+                        onHide: _hideRymuKeyboard,
+                        displayControl: ListenableBuilder(
+                          listenable: gFFI.ffiModel,
+                          builder: (context, _) => Obx(_rymuDisplayControl),
+                        ),
+                      ),
+                    ),
+                ])
+              : viewer),
     );
   }
 
-  bool _handleLocalKeyEvent(KeyEvent event) => handleMobileLocalKeyEvent(event,
-      remoteFocused: _physicalFocusNode.hasPrimaryFocus, inputModel: inputModel);
+  bool _handleLocalKeyEvent(KeyEvent event) =>
+      (!_rymu || !widget.rymuViewOnly) &&
+      handleMobileLocalKeyEvent(event,
+          remoteFocused: _physicalFocusNode.hasPrimaryFocus,
+          inputModel: inputModel);
 
-  Widget getRawPointerAndKeyBody(Widget child) {
+  Widget getRawPointerAndKeyBody(Widget child, {required bool ready}) {
+    if (_rymu && widget.rymuViewOnly) return child;
+    if (_rymuOverview != null) {
+      return ready ? RawKeyFocusScope(focusNode: _physicalFocusNode,
+          inputModel: inputModel, child: child) : child;
+    }
     final ffiModel = Provider.of<FfiModel>(context);
     return RawPointerMouseRegion(
       cursor: ffiModel.keyboard ? SystemMouseCursors.none : MouseCursor.defer,
       inputModel: inputModel,
       // Disable RawKeyFocusScope before the connecting is established.
       // The "Delete" key on the soft keyboard may be grabbed when inputting the password dialog.
-      child: gFFI.ffiModel.pi.isSet.isTrue
+      child: ready
           ? RawKeyFocusScope(
               focusNode: _physicalFocusNode,
               inputModel: inputModel,
@@ -598,6 +1027,353 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           : child,
     );
   }
+
+  Widget _rymuSessionBar() {
+    final active = _rymuReady;
+    final status = active
+        ? _rymuCanInput
+            ? _rymuText('Connected', 'متصل')
+            : _rymuText('View only', 'عرض فقط')
+        : _rymuText('Connecting…', 'جارٍ الاتصال…');
+    return RymuAndroidSessionBar(
+      name: widget.rymuName!,
+      status: status,
+      arabic: _rymuArabic,
+      displayControl: _rymuDisplayControl(),
+      onText: _rymuCanInput ? _openRymuKeyboard : null,
+      onSettings: active ? _showRymuControls : null,
+      onDisconnect: _closeRymuSession,
+    );
+  }
+
+  void _closeRymuSession() {
+    _rymuClosing = true;
+    _hideRymuKeyboard(restoreFocus: false);
+    gFFI.ffiModel.setRymuReconnectHandler(null);
+    closeConnection();
+  }
+
+  List<Rect> _screenTopology(PeerInfo peer) => [
+        for (final display in peer.displays)
+          Rect.fromLTWH(display.x, display.y, display.width.toDouble(),
+              display.height.toDouble()),
+      ];
+
+  List<int> _sessionScreens(PeerInfo peer) {
+    final included = _rymuIncludedScreens;
+    if (included != null &&
+        listEquals(_rymuScreenTopology, _screenTopology(peer))) {
+      return included.toList()..sort();
+    }
+    return List.generate(peer.displays.length, (index) => index);
+  }
+
+  Widget _rymuDisplayControl() {
+    final peer = gFFI.ffiModel.pi;
+    final count = _rymuReady ? peer.displays.length : 0;
+    final screens = count == 0 ? const <int>[] : _sessionScreens(peer);
+    return RymuSessionDisplayControl(
+      arabic: _rymuArabic,
+      current: count == 0 ? 0 : peer.currentDisplay.clamp(0, count - 1).toInt() + 1,
+      count: count,
+      overview: _rymuOverview != null,
+      cycleCount: screens.length,
+      onNext: screens.length > 1 ? _nextRymuDisplay : null,
+      onChoose: count > 0 ? _chooseRymuSessionScreens : null,
+    );
+  }
+
+  void _nextRymuDisplay() {
+    if (!_rymuReady) return;
+    final peer = gFFI.ffiModel.pi;
+    final screens = _sessionScreens(peer);
+    if (screens.length < 2) return;
+    final next = (screens.indexOf(peer.currentDisplay) + 1) % screens.length;
+    _switchRymuDisplay(peer, screens[next]);
+  }
+
+  void _switchRymuDisplay(PeerInfo peer, int index) {
+    if (_rymuOverview != null) {
+      _clearRymuOverview();
+      setState(() {});
+    }
+    if (index == peer.currentDisplay) return;
+    gFFI.canvasModel.fitRymuMobileViewport(force: true);
+    openMonitorInTheSameTab(index, gFFI, peer);
+  }
+
+  Future<void> _chooseRymuSessionScreens() async {
+    final peer = gFFI.ffiModel.pi;
+    final topology = _screenTopology(peer);
+    if (!_rymuReady || topology.isEmpty) return;
+    final reopenKeyboard = _showEdit;
+    if (reopenKeyboard) _hideRymuKeyboard();
+    final chosen = await showModalBottomSheet<Set<int>>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: .8,
+        child: RymuSessionScreensSheet(
+          arabic: _rymuArabic,
+          sizes: topology.map((display) => display.size).toList(),
+          current: peer.currentDisplay,
+          selected: _sessionScreens(peer).toSet(),
+          overviewActive: _rymuOverview != null,
+          onOverview: peer.platform == kPeerPlatformWindows &&
+              peer.isSupportMultiUiSession && topology.length > 1
+              ? () {
+                  Navigator.pop(context);
+                  _showRymuOverview();
+                } : null,
+          onFit: () {
+            Navigator.pop(context);
+            final overview = _rymuOverview;
+            if (overview != null) {
+              overview.fit();
+            } else {
+              gFFI.canvasModel.fitRymuMobileViewport(force: true);
+            }
+          },
+          onZoom: (factor) {
+            Navigator.pop(context);
+            final overview = _rymuOverview;
+            if (overview != null) {
+              final center = overview.viewport.center(Offset.zero);
+              overview.transform(factor, center, center);
+            } else {
+              final canvas = gFFI.canvasModel;
+              final center = canvas.size.center(Offset.zero);
+              canvas.transformRymuMobileViewport(factor, center, center);
+            }
+          },
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (chosen != null && _rymuReady &&
+        listEquals(topology, _screenTopology(peer))) {
+      setState(() {
+        _rymuScreenTopology = topology;
+        _rymuIncludedScreens = chosen.isEmpty || chosen.length == topology.length
+            ? null
+            : Set.unmodifiable(chosen);
+      });
+      if (_rymuOverview != null || (chosen.isNotEmpty && !chosen.contains(peer.currentDisplay))) {
+        _switchRymuDisplay(peer, _sessionScreens(peer).first);
+      }
+    }
+    if (reopenKeyboard && _rymuCanInput) await _openRymuKeyboard();
+  }
+
+  void _clearRymuOverview() {
+    gFFI.imageModel.rymuOverview = null;
+    _rymuOverview?.dispose();
+    _rymuOverview = null;
+  }
+
+  void _showRymuOverview() {
+    final peer = gFFI.ffiModel.pi;
+    if (!_rymuReady || peer.platform != kPeerPlatformWindows ||
+        !peer.isSupportMultiUiSession || peer.displays.length < 2) return;
+    if (_rymuOverview != null) {
+      _rymuOverview!.fit();
+      return;
+    }
+    final topology = _screenTopology(peer);
+    if (topology.any((screen) => screen.isEmpty)) return;
+    final overview = RymuMonitorOverview(topology);
+    setState(() => _rymuOverview = overview);
+    gFFI.imageModel.disposeImage();
+    gFFI.imageModel.rymuOverview = overview;
+    openMonitorInTheSameTab(kAllDisplayValue, gFFI, peer, updateCursorPos: false);
+  }
+
+  Future<void> _showRymuControls() async {
+    var changingAudio = false;
+    final hostKeyboard =
+        gFFI.ffiModel.pi.platformAdditions['rymu_keyboard_layout'];
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(builder: (context, refresh) {
+        final canInput = _rymuCanInput;
+        final clipboardAvailable =
+            canInput && gFFI.ffiModel.permissions['clipboard'] != false;
+        return Directionality(
+          textDirection: _rymuArabic ? TextDirection.rtl : TextDirection.ltr,
+          child: SafeArea(
+            top: false,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * .8),
+              child: ListView(shrinkWrap: true, children: [
+                ListTile(
+                    title:
+                        Text(_rymuText('Session settings', 'إعدادات الجلسة'))),
+                ListenableBuilder(
+                  listenable: gFFI.ffiModel,
+                  builder: (context, _) => Obx(() => RymuScreenPrivacyTile(
+                        arabic: _rymuArabic,
+                        active: _rymuPrivacyActive,
+                        available: _rymuPrivacyAvailable,
+                        onChanged: _setRymuPrivacy,
+                      )),
+                ),
+                if (canInput)
+                  RymuInputModeSelector(
+                    arabic: _rymuArabic,
+                    direct: gFFI.ffiModel.touchMode,
+                    onChanged: (direct) async {
+                      if (gFFI.ffiModel.touchMode != direct) gFFI.ffiModel.toggleTouchMode();
+                      refresh(() {});
+                      await bind.mainSetLocalOption(
+                          key: 'rymu-touch-$_rymuPreferenceKey',
+                          value: gFFI.ffiModel.touchMode ? 'touch' : 'mouse');
+                    },
+                  ),
+                _rymuPreference(
+                  _rymuText('Quality', 'الجودة'),
+                  _rymuQuality,
+                  {
+                    kRemoteImageQualityBalanced: _rymuText('Auto', 'تلقائية'),
+                    kRemoteImageQualityLow:
+                        _rymuText('Data Saver', 'توفير البيانات'),
+                    kRemoteImageQualityBest:
+                        _rymuText('High Quality', 'جودة عالية'),
+                  },
+                  (value) async {
+                    refresh(() => _rymuQuality = value);
+                    await bind.sessionSetImageQuality(
+                        sessionId: sessionId, value: value);
+                  },
+                ),
+                ListenableBuilder(
+                  listenable: gFFI.ffiModel,
+                  builder: (context, _) {
+                    if (gFFI.ffiModel.permissions['audio'] != true) {
+                      return const SizedBox.shrink();
+                    }
+                    const option = 'disable-audio';
+                    return SwitchListTile(
+                      title: Text(_rymuText('Computer audio', 'صوت الكمبيوتر')),
+                      value: bind.sessionGetToggleOptionSync(
+                              sessionId: sessionId, arg: option) == false,
+                      onChanged: changingAudio ? null : (_) async {
+                        if (!_rymuReady || changingAudio ||
+                            gFFI.ffiModel.permissions['audio'] != true) return;
+                        refresh(() => changingAudio = true);
+                        try {
+                          await bind.sessionToggleOption(
+                              sessionId: sessionId, value: option);
+                        } catch (_) {
+                          if (context.mounted) {
+                            showToast(_rymuText('Could not change computer audio.',
+                                'تعذّر تغيير صوت الكمبيوتر.'));
+                          }
+                        } finally {
+                          if (context.mounted) {
+                            refresh(() => changingAudio = false);
+                          }
+                        }
+                      },
+                    );
+                  },
+                ),
+                _rymuPreference(
+                  _rymuText('Session language', 'لغة الجلسة'),
+                  _rymuLanguage,
+                  {
+                    'auto': _rymuText('Auto', 'تلقائية'),
+                    'en': 'English',
+                    'ar': 'العربية'
+                  },
+                  (value) async {
+                    setState(() => _rymuLanguage = value);
+                    refresh(() {});
+                    await bind.mainSetLocalOption(
+                        key: 'rymu-session-language-$_rymuPreferenceKey',
+                        value: value);
+                    await bind.mainSetLocalOption(
+                        key: kCommConfKeyLang,
+                        value: _rymuArabic ? 'ar' : 'en');
+                  },
+                ),
+                if (_rymuLanguage == 'auto' &&
+                    !{'ar', 'en'}.contains(_rymuHostLocale))
+                  ListTile(
+                      subtitle: Text(_rymuText(
+                          'Remote language unknown. Using the phone’s language.',
+                          'لغة الكمبيوتر غير معروفة. تُستخدم لغة الهاتف.'))),
+                ListTile(
+                  title: Text(_rymuText(
+                      'Remote keyboard layout', 'تخطيط لوحة مفاتيح الكمبيوتر')),
+                  subtitle: hostKeyboard is String && hostKeyboard.isNotEmpty
+                      ? Text(hostKeyboard, textDirection: TextDirection.ltr)
+                      : Text(_rymuText('Unknown', 'غير معروف')),
+                ),
+                SwitchListTile(
+                  title: Text(_rymuText('Text clipboard', 'حافظة النصوص')),
+                  subtitle: Text(_rymuText(
+                      'Applies to this session while Rymu is in use.',
+                      'تُستخدم في هذه الجلسة عندما يكون ريمو في الواجهة.')),
+                  value: _rymuClipboardEnabled && clipboardAvailable,
+                  onChanged: !clipboardAvailable
+                      ? null
+                      : (value) async {
+                          await _setRymuClipboard(value);
+                          if (context.mounted) refresh(() {});
+                        },
+                ),
+                if (_rymuClipboardEnabled && clipboardAvailable)
+                  ListTile(
+                      title: Text(_rymuText(
+                          'Send phone clipboard', 'إرسال حافظة الهاتف')),
+                      onTap: trySyncClipboard),
+                SwitchListTile(
+                  title: Text(
+                      _rymuText('Connection diagnostics', 'تشخيص الاتصال')),
+                  value: bind.sessionGetToggleOptionSync(
+                          sessionId: sessionId,
+                          arg: kOptionShowQualityMonitor) ==
+                      true,
+                  onChanged: (_) async {
+                    await bind.sessionToggleOption(
+                        sessionId: sessionId, value: kOptionShowQualityMonitor);
+                    await gFFI.qualityMonitorModel
+                        .checkShowQualityMonitor(sessionId);
+                    if (context.mounted) refresh(() {});
+                  },
+                ),
+              ]),
+            ),
+          ),
+        );
+      }),
+    );
+    if (mounted) _physicalFocusNode.requestFocus();
+  }
+
+  Widget _rymuPreference(String label, String selected,
+          Map<String, String> options, ValueChanged<String> changed) =>
+      Padding(
+        padding: const EdgeInsetsDirectional.fromSTEB(16, 6, 16, 6),
+        child: DropdownButtonFormField<String>(
+          isExpanded: true,
+          value: selected,
+          decoration: InputDecoration(labelText: label),
+          items: options.entries
+              .map((option) => DropdownMenuItem(
+                  value: option.key, child: Text(option.value)))
+              .toList(),
+          onChanged: (value) {
+            if (value != null) changed(value);
+          },
+        ),
+      );
 
   Widget getBottomAppBar() {
     final ffiModel = Provider.of<FfiModel>(context);
@@ -705,65 +1481,67 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget getBodyForMobile() {
     return Container(
-        color: MyTheme.canvasColor,
+        color: _rymu ? RymuGlassPalette.of(context).canvas : MyTheme.canvasColor,
         child: Stack(children: () {
           final paints = [
-            ImagePaint(ffiModel: gFFI.ffiModel),
+            if (_rymuOverview != null)
+              RymuMonitorOverviewView(overview: _rymuOverview!,
+                  cursor: gFFI.cursorModel, arabic: _rymuArabic,
+                  showCursor: showCursorPaint)
+            else ImagePaint(ffiModel: gFFI.ffiModel),
             Positioned(
               top: 10,
               right: 10,
               child: QualityMonitor(gFFI.qualityMonitorModel),
             ),
-            Obx(() {
-              final chatKeyboardRequested =
-                  gFFI.chatModel.softKeyboardRequested.value;
-              return KeyHelpTools(
-                  keyboardIsVisible: keyboardVisibilityController.isVisible &&
-                      (_showEdit || chatKeyboardRequested),
-                  showGestureHelp: _showGestureHelp);
-            }),
-            SizedBox(
-              width: 0,
-              height: 0,
-              child: !_showEdit
-                  ? Container()
-                  : TextFormField(
-                      textInputAction: TextInputAction.newline,
-                      autocorrect: false,
-                      // Flutter 3.16.9 Android.
-                      // `enableSuggestions` causes secure keyboard to be shown.
-                      // https://github.com/flutter/flutter/issues/139143
-                      // https://github.com/flutter/flutter/issues/146540
-                      // enableSuggestions: false,
-                      autofocus: true,
-                      focusNode: _mobileFocusNode,
-                      maxLines: null,
-                      controller: _textController,
-                      // trick way to make backspace work always
-                      keyboardType: TextInputType.multiline,
-                      // `onChanged` may be called depending on the input method if this widget is wrapped in
-                      // `Focus(onKeyEvent: ..., child: ...)`
-                      // For `Backspace` button in the soft keyboard:
-                      // en/fr input method:
-                      //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
-                      //      2. The button will trigger `onKeyEvent` if the text field is empty.
-                      // ko/zh/ja input method: the button will trigger `onKeyEvent`
-                      //                     and the event will not popup if `KeyEventResult.handled` is returned.
-                      onChanged: handleSoftKeyboardInput,
-                    ).workaroundFreezeLinuxMint(),
-            ),
+            if (!_rymu)
+              Obx(() {
+                final chatKeyboardRequested =
+                    gFFI.chatModel.softKeyboardRequested.value;
+                return KeyHelpTools(
+                    keyboardIsVisible: keyboardVisibilityController.isVisible &&
+                        (_showEdit || chatKeyboardRequested),
+                    showGestureHelp: _showGestureHelp);
+              }),
+            if (!_rymu)
+              SizedBox(
+                width: 0,
+                height: 0,
+                child: !_showEdit
+                    ? Container()
+                    : TextFormField(
+                        textInputAction: TextInputAction.newline,
+                        autocorrect: false,
+                        // Flutter 3.16.9 Android.
+                        // `enableSuggestions` causes secure keyboard to be shown.
+                        // https://github.com/flutter/flutter/issues/139143
+                        // https://github.com/flutter/flutter/issues/146540
+                        // enableSuggestions: false,
+                        autofocus: true,
+                        focusNode: _mobileFocusNode,
+                        maxLines: null,
+                        controller: _textController,
+                        // trick way to make backspace work always
+                        keyboardType: TextInputType.multiline,
+                        // `onChanged` may be called depending on the input method if this widget is wrapped in
+                        // `Focus(onKeyEvent: ..., child: ...)`
+                        // For `Backspace` button in the soft keyboard:
+                        // en/fr input method:
+                        //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
+                        //      2. The button will trigger `onKeyEvent` if the text field is empty.
+                        // ko/zh/ja input method: the button will trigger `onKeyEvent`
+                        //                     and the event will not popup if `KeyEventResult.handled` is returned.
+                        onChanged: handleSoftKeyboardInput,
+                      ).workaroundFreezeLinuxMint(),
+              ),
           ];
-          if (showCursorPaint) {
+          if (showCursorPaint && _rymuOverview == null) {
             paints.add(CursorPaint(widget.id));
           }
-          if (gFFI.ffiModel.touchMode) {
-            paints.add(FloatingMouse(
-              ffi: gFFI,
-            ));
-          } else {
-            paints.add(FloatingMouseWidgets(
-              ffi: gFFI,
-            ));
+          if (!_rymu) {
+            paints.add(gFFI.ffiModel.touchMode
+                ? FloatingMouse(ffi: gFFI)
+                : FloatingMouseWidgets(ffi: gFFI));
           }
           return paints;
         }()));

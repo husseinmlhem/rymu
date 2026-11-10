@@ -7,6 +7,8 @@
 #include <memory>
 
 #include "win32_window.h"
+#include "rymu_tray.h"
+#include "rymu_packaged_startup.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -28,6 +30,8 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+  std::unique_ptr<RymuTray> rymu_tray_;
+  std::unique_ptr<RymuPackagedStartup> rymu_packaged_startup_;
 
   // Whether the engine has generated its first frame. Note that a generated
   // frame is not necessarily presented: the resize synchronization may reject

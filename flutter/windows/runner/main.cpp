@@ -10,7 +10,7 @@
 #include "win32_desktop.h"
 #include "flutter_window.h"
 #include "utils.h"
-#include "service_control.h"
+#include "rymu_installer_startup.h"
 
 typedef char** (*FUNC_RUSTDESK_CORE_MAIN)(int*);
 typedef void (*FUNC_RUSTDESK_FREE_ARGS)( char**, int);
@@ -22,10 +22,23 @@ const std::vector<std::string> parameters_white_list = {"--install", "--cm"};
 const wchar_t* getWindowClassName();
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
-                      _In_ wchar_t *command_line, _In_ int show_command)
+                      _In_ wchar_t *, _In_ int show_command)
 {
-  if (auto result = service_control::HandleCommand(command_line)) {
-    return static_cast<int>(*result);
+  std::vector<std::string> command_line_arguments = GetCommandLineArguments();
+  for (auto& argument : command_line_arguments) {
+    // Utf8FromUtf16 includes the terminating NUL in its returned string.
+    if (!argument.empty() && argument.back() == '\0') {
+      argument.pop_back();
+    }
+    const auto end = argument.find_last_not_of(" \n\r\t");
+    argument.erase(end == std::string::npos ? 0 : end + 1);
+  }
+  if (const auto result = RymuInstallerStartup(command_line_arguments)) {
+    return *result;
+  }
+  if (std::find(command_line_arguments.begin(), command_line_arguments.end(),
+                "--service-control") != command_line_arguments.end()) {
+    return ERROR_ACCESS_DENIED;
   }
   HINSTANCE hInstance = LoadLibraryA("librustdesk.dll");
   if (!hInstance)
@@ -47,13 +60,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     std::cout << "Failed to get free_c_args." << std::endl;
     return EXIT_FAILURE;
   }
-  std::vector<std::string> command_line_arguments =
-      GetCommandLineArguments();
-  // Remove possible trailing whitespace from command line arguments
-  for (auto& argument : command_line_arguments) {
-    argument.erase(argument.find_last_not_of(" \n\r\t"));
-  }
-
   int args_len = 0;
   char** c_args = rustdesk_core_main(&args_len);
   if (!c_args)
@@ -84,7 +90,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
         command_line_arguments.end());
   }
 
-  std::wstring app_name = L"RustDesk";
+  std::wstring app_name = L"Rymu";
   FUNC_RUSTDESK_GET_APP_NAME get_rustdesk_app_name = (FUNC_RUSTDESK_GET_APP_NAME)GetProcAddress(hInstance, "get_rustdesk_app_name");
   if (get_rustdesk_app_name) {
     wchar_t app_name_buffer[512] = {0};

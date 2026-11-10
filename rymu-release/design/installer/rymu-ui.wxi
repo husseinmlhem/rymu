@@ -1,0 +1,216 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Include xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <UI Id="RymuUI">
+    <TextStyle Id="WixUI_Font_Normal" FaceName="Segoe UI" Size="9" Red="35" Green="35" Blue="35" />
+    <TextStyle Id="WixUI_Font_Bigger" FaceName="Segoe UI" Size="22" Red="23" Green="23" Blue="23" Bold="yes" />
+    <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="11" Red="23" Green="23" Blue="23" Bold="yes" />
+    <TextStyle Id="RymuMuted" FaceName="Segoe UI" Size="8" Red="81" Green="81" Blue="81" />
+    <TextStyle Id="RymuStep" FaceName="Segoe UI" Size="7" Red="110" Green="110" Blue="110" />
+    <TextStyle Id="RymuStepActive" FaceName="Segoe UI" Size="7" Red="23" Green="23" Blue="23" Bold="yes" />
+    <TextStyle Id="RymuWhite" FaceName="Segoe UI" Size="12" Red="245" Green="245" Blue="245" />
+    <TextStyle Id="RymuBrand" FaceName="Segoe UI" Size="20" Red="255" Green="255" Blue="255" Bold="yes" />
+    <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+    <Property Id="RYMU_LAUNCH_NOW" Value="1" />
+    <Property Id="RYMU_START_WINDOWS" Value="1" />
+    <DialogRef Id="ErrorDlg" />
+    <DialogRef Id="FatalError" />
+    <DialogRef Id="UserExit" />
+    <DialogRef Id="FilesInUse" />
+    <DialogRef Id="MsiRMFilesInUse" />
+    <DialogRef Id="OutOfDiskDlg" />
+    <Dialog Id="RymuWelcomeDlg" Width="600" Height="390" Title="Rymu Setup">
+      <Control Id="Artwork" Type="Bitmap" X="0" Y="0" Width="600" Height="344" Text="Rymu_welcome" />
+      <Control Id="Brand" Type="Text" X="70" Y="32" Width="140" Height="30" Transparent="yes" NoPrefix="yes" Text="{\RymuBrand}rymu" />
+      <Control Id="HeroCaption" Type="Text" X="32" Y="284" Width="184" Height="34" Transparent="yes" NoPrefix="yes" Text="{\RymuWhite}Free essentials.&#13;&#10;Always." />
+      <Control Id="Step1" Type="Text" X="268" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStepActive}01  SET UP" />
+      <Control Id="Step2" Type="Text" X="370" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}02  INSTALL" />
+      <Control Id="Step3" Type="Text" X="472" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}03  READY" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="344" Width="600" Height="0" />
+      <Control Id="Version" Type="Text" X="20" Y="363" Width="272" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}RYMU  /  [ProductVersion]  /  WINDOWS 11 x64" />
+      <Control Id="Title" Type="Text" X="268" Y="67" Width="304" Height="62" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Bigger}Your desktop.&#13;&#10;Anywhere." />
+      <Control Id="Intro" Type="Text" X="268" Y="139" Width="304" Height="31" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Connect to your computer from your phone or another PC. One familiar account." />
+      <Control Id="FeatureTitle0" Type="Text" X="282" Y="191" Width="278" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Free essentials, forever" />
+      <Control Id="FeatureBody0" Type="Text" X="282" Y="208" Width="278" Height="13" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}Everyday remote access without a subscription." />
+      <Control Id="FeatureTitle1" Type="Text" X="282" Y="238" Width="278" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Your devices, together" />
+      <Control Id="FeatureBody1" Type="Text" X="282" Y="255" Width="278" Height="13" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}Windows host. Android and Windows controllers." />
+      <Control Id="FeatureTitle2" Type="Text" X="282" Y="285" Width="278" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Keep what matters" />
+      <Control Id="FeatureBody2" Type="Text" X="282" Y="302" Width="278" Height="13" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}Your saved sign-in and settings stay when you update." />
+      <Control Id="Install" Type="PushButton" X="398" Y="358" Width="100" Height="22" Text="&amp;Install Rymu" Default="yes">
+        <Publish Value="Return" Event="EndDialog">OutOfDiskSpace &lt;&gt; 1</Publish>
+        <Publish Value="OutOfDiskDlg" Event="SpawnDialog">OutOfDiskSpace = 1</Publish>
+      </Control>
+      <Control Id="Cancel" Type="PushButton" X="510" Y="358" Width="70" Height="22" Text="Cancel" Cancel="yes">
+        <Publish Value="CancelDlg" Event="SpawnDialog">1</Publish>
+      </Control>
+    </Dialog>
+    <Dialog Id="RymuProgressDlg" Width="600" Height="390" Title="Rymu Setup" Modeless="yes">
+      <Control Id="Artwork" Type="Bitmap" X="0" Y="0" Width="600" Height="344" Text="Rymu_progress" />
+      <Control Id="Brand" Type="Text" X="70" Y="32" Width="140" Height="30" Transparent="yes" NoPrefix="yes" Text="{\RymuBrand}rymu" />
+      <Control Id="HeroCaption" Type="Text" X="32" Y="284" Width="184" Height="34" Transparent="yes" NoPrefix="yes" Text="{\RymuWhite}Free essentials.&#13;&#10;Always." />
+      <Control Id="Step1" Type="Text" X="268" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}01  SET UP">
+        <Condition Action="hide">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="RemoveStep1" Type="Text" X="268" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}01  REVIEW" Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="Step2" Type="Text" X="370" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStepActive}02  INSTALL">
+        <Condition Action="hide">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="RemoveStep2" Type="Text" X="370" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStepActive}02  REMOVE" Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="Step3" Type="Text" X="472" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}03  READY">
+        <Condition Action="hide">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="RemoveStep3" Type="Text" X="472" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}03  DONE" Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="BottomLine" Type="Line" X="0" Y="344" Width="600" Height="0" />
+      <Control Id="Version" Type="Text" X="20" Y="363" Width="272" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}RYMU  /  [ProductVersion]  /  WINDOWS 11 x64" />
+      <Control Id="Title" Type="Text" X="268" Y="69" Width="304" Height="63" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Bigger}A moment.&#13;&#10;Then, anywhere." />
+      <Control Id="Installing" Type="Text" X="268" Y="140" Width="304" Height="32" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Windows is setting up Rymu for this account. Your personal files stay in place.">
+        <Condition Action="hide">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="Removing" Type="Text" X="268" Y="140" Width="304" Height="32" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Windows is removing the app. Your account settings and personal files stay in place." Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="ProgressLabel" Type="Text" X="284" Y="197" Width="274" Height="16" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Setup progress" />
+      <Control Id="ProgressBar" Type="ProgressBar" X="284" Y="225" Width="274" Height="10" ProgressBlocks="no">
+        <Subscribe Event="SetProgress" Attribute="Progress" />
+      </Control>
+      <Control Id="ActionText" Type="Text" X="284" Y="249" Width="274" Height="34" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}">
+        <Subscribe Event="ActionText" Attribute="Text" />
+      </Control>
+      <Control Id="Wait" Type="Text" X="268" Y="312" Width="304" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}Keep this window open until setup finishes." />
+      <Control Id="Cancel" Type="PushButton" X="510" Y="358" Width="70" Height="22" Text="Cancel" Default="yes" Cancel="yes">
+        <Publish Value="CancelDlg" Event="SpawnDialog">1</Publish>
+      </Control>
+    </Dialog>
+    <Dialog Id="RymuRemoveDlg" Width="600" Height="390" Title="Rymu Setup">
+      <Control Id="Artwork" Type="Bitmap" X="0" Y="0" Width="600" Height="344" Text="Rymu_remove" />
+      <Control Id="Brand" Type="Text" X="70" Y="32" Width="140" Height="30" Transparent="yes" NoPrefix="yes" Text="{\RymuBrand}rymu" />
+      <Control Id="HeroCaption" Type="Text" X="32" Y="284" Width="184" Height="34" Transparent="yes" NoPrefix="yes" Text="{\RymuWhite}Free essentials.&#13;&#10;Always." />
+      <Control Id="Step1" Type="Text" X="268" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStepActive}01  REVIEW" />
+      <Control Id="Step2" Type="Text" X="370" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}02  REMOVE" />
+      <Control Id="Step3" Type="Text" X="472" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}03  DONE" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="344" Width="600" Height="0" />
+      <Control Id="Version" Type="Text" X="20" Y="363" Width="272" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}RYMU  /  [ProductVersion]  /  WINDOWS 11 x64" />
+      <Control Id="Title" Type="Text" X="268" Y="67" Width="304" Height="63" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Bigger}Your setup.&#13;&#10;Your choice." />
+      <Control Id="Intro" Type="Text" X="268" Y="141" Width="304" Height="30" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Rymu is installed for your Windows account. Keep it, or remove the app from this computer." />
+      <Control Id="KeepHeading" Type="Text" X="284" Y="195" Width="274" Height="18" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Your data stays yours" />
+      <Control Id="KeepText" Type="Text" X="284" Y="222" Width="274" Height="60" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Saved sign-in, settings and personal files remain.&#13;&#10;&#13;&#10;Before continuing, quit Rymu from its tray menu to end active connections." />
+      <Control Id="Keep" Type="PushButton" X="398" Y="358" Width="100" Height="22" Text="&amp;Keep Rymu" Default="yes" Cancel="yes">
+        <Publish Value="Exit" Event="EndDialog">1</Publish>
+      </Control>
+      <Control Id="Remove" Type="PushButton" X="510" Y="358" Width="70" Height="22" Text="&amp;Uninstall">
+        <Publish Value="RymuConfirmRemoveDlg" Event="NewDialog">1</Publish>
+      </Control>
+    </Dialog>
+    <Dialog Id="RymuConfirmRemoveDlg" Width="600" Height="390" Title="Rymu Setup">
+      <Control Id="Artwork" Type="Bitmap" X="0" Y="0" Width="600" Height="344" Text="Rymu_remove" />
+      <Control Id="Brand" Type="Text" X="70" Y="32" Width="140" Height="30" Transparent="yes" NoPrefix="yes" Text="{\RymuBrand}rymu" />
+      <Control Id="HeroCaption" Type="Text" X="32" Y="284" Width="184" Height="34" Transparent="yes" NoPrefix="yes" Text="{\RymuWhite}Free essentials.&#13;&#10;Always." />
+      <Control Id="Step1" Type="Text" X="268" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStepActive}01  REVIEW" />
+      <Control Id="Step2" Type="Text" X="370" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}02  REMOVE" />
+      <Control Id="Step3" Type="Text" X="472" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}03  DONE" />
+      <Control Id="BottomLine" Type="Line" X="0" Y="344" Width="600" Height="0" />
+      <Control Id="Version" Type="Text" X="20" Y="363" Width="272" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}RYMU  /  [ProductVersion]  /  WINDOWS 11 x64" />
+      <Control Id="Title" Type="Text" X="268" Y="67" Width="304" Height="63" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Bigger}Ready to&#13;&#10;remove Rymu?" />
+      <Control Id="Intro" Type="Text" X="268" Y="141" Width="304" Height="30" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Uninstalling ends remote access through this installation." />
+      <Control Id="KeepHeading" Type="Text" X="284" Y="195" Width="274" Height="18" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Your data stays yours" />
+      <Control Id="KeepText" Type="Text" X="284" Y="222" Width="274" Height="60" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Saved sign-in, settings and personal files remain.&#13;&#10;&#13;&#10;Before continuing, quit Rymu from its tray menu to end active connections." />
+      <Control Id="Back" Type="PushButton" X="398" Y="358" Width="100" Height="22" Text="&amp;Back" Default="yes">
+        <Publish Value="RymuRemoveDlg" Event="NewDialog">1</Publish>
+      </Control>
+      <Control Id="Remove" Type="PushButton" X="510" Y="358" Width="70" Height="22" Text="&amp;Uninstall">
+        <Publish Value="ALL" Property="REMOVE" Order="1">1</Publish>
+        <Publish Value="ALL" Event="Remove" Order="2">1</Publish>
+        <Publish Value="Return" Event="EndDialog" Order="3">1</Publish>
+      </Control>
+      <Control Id="Cancel" Type="PushButton" X="308" Y="358" Width="78" Height="22" Text="Cancel" Cancel="yes">
+        <Publish Value="Exit" Event="EndDialog">1</Publish>
+      </Control>
+    </Dialog>
+    <Dialog Id="RymuExitDlg" Width="600" Height="390" Title="Rymu Setup">
+      <Control Id="Artwork" Type="Bitmap" X="0" Y="0" Width="600" Height="344" Text="Rymu_finish" />
+      <Control Id="Brand" Type="Text" X="70" Y="32" Width="140" Height="30" Transparent="yes" NoPrefix="yes" Text="{\RymuBrand}rymu" />
+      <Control Id="HeroCaption" Type="Text" X="32" Y="284" Width="184" Height="34" Transparent="yes" NoPrefix="yes" Text="{\RymuWhite}Free essentials.&#13;&#10;Always." />
+      <Control Id="Step1" Type="Text" X="268" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}01  SET UP">
+        <Condition Action="hide">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="RemoveStep1" Type="Text" X="268" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}01  REVIEW" Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="Step2" Type="Text" X="370" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}02  INSTALL">
+        <Condition Action="hide">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="RemoveStep2" Type="Text" X="370" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}02  REMOVE" Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="Step3" Type="Text" X="472" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStepActive}03  READY">
+        <Condition Action="hide">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="RemoveStep3" Type="Text" X="472" Y="29" Width="102" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStepActive}03  DONE" Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="BottomLine" Type="Line" X="0" Y="344" Width="600" Height="0" />
+      <Control Id="Version" Type="Text" X="20" Y="363" Width="272" Height="14" Transparent="yes" NoPrefix="yes" Text="{\RymuStep}RYMU  /  [ProductVersion]  /  WINDOWS 11 x64" />
+      <Control Id="InstalledTitle" Type="Text" X="268" Y="67" Width="304" Height="62" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Bigger}Welcome&#13;&#10;to Rymu.">
+        <Condition Action="hide">REMOVE = "ALL" OR ACTION = "ADMIN"</Condition>
+      </Control>
+      <Control Id="RemovedTitle" Type="Text" X="268" Y="67" Width="304" Height="62" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Bigger}Rymu&#13;&#10;is removed." Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="AdminTitle" Type="Text" X="268" Y="67" Width="304" Height="62" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Bigger}Package&#13;&#10;is ready." Hidden="yes">
+        <Condition Action="show">ACTION = "ADMIN"</Condition>
+      </Control>
+      <Control Id="Intro" Type="Text" X="268" Y="139" Width="304" Height="30" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Everything is in place. Choose how Rymu starts, then finish setup.">
+        <Condition Action="hide">NOT (UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN")</Condition>
+      </Control>
+      <Control Id="LaunchNow" Type="CheckBox" X="282" Y="190" Width="278" Height="18" Property="RYMU_LAUNCH_NOW" CheckBoxValue="1" Text="Launch Rymu now">
+        <Condition Action="hide">NOT (UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN")</Condition>
+      </Control>
+      <Control Id="LaunchNowDetail" Type="Text" X="296" Y="212" Width="262" Height="16" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}Open the app when you finish setup.">
+        <Condition Action="hide">NOT (UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN")</Condition>
+      </Control>
+      <Control Id="StartWindows" Type="CheckBox" X="282" Y="241" Width="278" Height="18" Property="RYMU_START_WINDOWS" CheckBoxValue="1" Text="Start Rymu with Windows">
+        <Condition Action="hide">NOT (UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN")</Condition>
+      </Control>
+      <Control Id="StartWindowsDetail" Type="Text" X="296" Y="263" Width="262" Height="16" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}Starts after you sign in to Windows.">
+        <Condition Action="hide">NOT (UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN")</Condition>
+      </Control>
+      <Control Id="LaterNote" Type="Text" X="268" Y="306" Width="304" Height="26" Transparent="yes" NoPrefix="yes" Text="{\RymuMuted}Finish saves these choices. Close leaves them unchanged.">
+        <Condition Action="hide">NOT (UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN")</Condition>
+      </Control>
+      <Control Id="RemovedText" Type="Text" X="284" Y="195" Width="274" Height="90" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}The app has been removed. Your saved account settings and personal files are still on this computer.&#13;&#10;&#13;&#10;You can install Rymu again whenever you need it." Hidden="yes">
+        <Condition Action="show">REMOVE = "ALL"</Condition>
+      </Control>
+      <Control Id="MaintainedText" Type="Text" X="284" Y="195" Width="274" Height="90" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}Rymu setup is complete. Your startup preference has not been changed.&#13;&#10;&#13;&#10;Open Rymu from the Start menu when you are ready." Hidden="yes">
+        <Condition Action="show">NOT (UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN") AND REMOVE &lt;&gt; "ALL" AND ACTION &lt;&gt; "ADMIN"</Condition>
+      </Control>
+      <Control Id="AdminText" Type="Text" X="284" Y="195" Width="274" Height="90" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Normal}The administrative package is ready. This operation has not started Rymu or changed its startup preference." Hidden="yes">
+        <Condition Action="show">ACTION = "ADMIN"</Condition>
+      </Control>
+      <Control Id="Finish" Type="PushButton" X="480" Y="358" Width="100" Height="22" Text="&amp;Finish" Default="yes">
+        <Publish Value="on" Property="RYMU_STARTUP_ARG" Order="1">UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN" AND RYMU_START_WINDOWS = "1"</Publish>
+        <Publish Value="off" Property="RYMU_STARTUP_ARG" Order="2">UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN" AND RYMU_START_WINDOWS &lt;&gt; "1"</Publish>
+        <Publish Value="RymuApplyStartup" Event="DoAction" Order="3">UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN"</Publish>
+        <Publish Value="RymuLaunchNow" Event="DoAction" Order="4">UILevel &gt;= 5 AND NOT Installed AND NOT REMOVE AND NOT REINSTALL AND NOT PATCH AND ACTION &lt;&gt; "ADMIN" AND RYMU_LAUNCH_NOW = "1"</Publish>
+        <Publish Value="Return" Event="EndDialog" Order="5">1</Publish>
+      </Control>
+      <Control Id="Close" Type="PushButton" X="390" Y="358" Width="78" Height="22" Text="Close" Cancel="yes">
+        <Publish Value="Return" Event="EndDialog">1</Publish>
+      </Control>
+    </Dialog>
+    <InstallUISequence>
+      <Show Dialog="RymuWelcomeDlg" Before="RymuProgressDlg">NOT Installed OR RESUME</Show>
+      <Show Dialog="RymuRemoveDlg" Before="RymuWelcomeDlg">Installed AND NOT RESUME AND NOT PATCH AND NOT REINSTALL</Show>
+      <Show Dialog="RymuProgressDlg" Before="ExecuteAction" />
+      <Show Dialog="RymuExitDlg" OnExit="success" />
+    </InstallUISequence>
+    <AdminUISequence>
+      <Show Dialog="RymuExitDlg" OnExit="success" />
+    </AdminUISequence>
+  </UI>
+  <UIRef Id="WixUI_Common" />
+</Include>

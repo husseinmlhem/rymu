@@ -75,17 +75,15 @@ class MainActivity : FlutterActivity() {
 
     private var pendingPicker: PendingPicker? = null
     private val documentPicker by lazy { DocumentPicker(this) }
+    private var rymuAccount: RymuAccountChannel? = null
 
     private var isAudioStart = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        if (MainService.isReady) {
-            Intent(activity, MainService::class.java).also {
-                bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
-            }
-        }
+        rymuAccount = RymuAccountChannel(this, flutterEngine.dartExecutor.binaryMessenger)
+            .also { it.acceptCallback(intent) }
         flutterMethodChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             channelTag
@@ -98,6 +96,18 @@ class MainActivity : FlutterActivity() {
                 Log.e("MainActivity", "Failed to setCodecInfo: ${e.message}", e)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        rymuAccount?.acceptCallback(intent)
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        rymuAccount?.close()
+        rymuAccount = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     override fun onResume() {
@@ -253,6 +263,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        rdClipboardManager?.setForeground(hasFocus)
+    }
+
     override fun onDestroy() {
         documentPicker.close()
         Log.e(logTag, "onDestroy")
@@ -390,6 +405,10 @@ class MainActivity : FlutterActivity() {
                 }
                 "try_sync_clipboard" -> {
                     rdClipboardManager?.syncClipboard(true)
+                    result.success(true)
+                }
+                "rymu_clipboard_active" -> {
+                    rdClipboardManager?.setSessionAllowed(call.arguments == true)
                     result.success(true)
                 }
                 GET_START_ON_BOOT_OPT -> {

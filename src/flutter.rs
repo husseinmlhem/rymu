@@ -1230,7 +1230,8 @@ impl FlutterHandler {
         let mut is_sent = false;
         let is_multi_sessions = self.is_multi_ui_session();
         for h in self.session_handlers.read().unwrap().values() {
-            // The soft renderer does not support multi-displays session for now.
+            // Rymu Android keeps one live software frame per captured display.
+            #[cfg(not(target_os = "android"))]
             if h.displays.len() > 1 {
                 continue;
             }
@@ -2231,7 +2232,7 @@ pub mod sessions {
             let mut write_lock = s.ui_handler.session_handlers.write().unwrap();
             if let Some(h) = write_lock.get_mut(&session_id) {
                 h.displays = value.iter().map(|x| *x as usize).collect::<_>();
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                #[cfg(not(target_os = "ios"))]
                 let displays_refresh = value.clone();
                 if value.len() == 1 {
                     // Switch display.
@@ -2264,7 +2265,7 @@ pub mod sessions {
                 // One more key frame (first frame) will be sent because the refresh message.
                 // 2. If this display is currently captured -> Not refresh -> Message "Refresh display" is required.
                 // Without the message, the control side cannot see the latest display image.
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                #[cfg(not(target_os = "ios"))]
                 {
                     let is_support_multi_ui_session = crate::common::is_support_multi_ui_session(
                         &s.ui_handler.peer_info.read().unwrap().version,

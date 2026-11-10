@@ -90,6 +90,7 @@ type ConnMap = HashMap<i32, ConnInner>;
 pub struct ConnectionMeta {
     pub control_permissions: Option<ControlPermissions>,
     pub controlled_context: Option<ControlledContext>,
+    pub(crate) rymu_host_epoch: Option<uuid::Uuid>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -217,6 +218,9 @@ pub async fn create_tcp_connection(
     secure: bool,
     meta: ConnectionMeta,
 ) -> ResultType<()> {
+    if !crate::rymu::hosting() {
+        bail!("Rymu hosting is disabled");
+    }
     let mut stream = stream;
     // The address the connection layer keys on, whitelist and admission alike.
     let addr = hbb_common::try_into_v4(addr);
@@ -234,6 +238,10 @@ pub async fn create_tcp_connection(
             bail!("evicted to make room for a newer unauthenticated connection");
         }
     }
+    let lease = tokio::select! {
+        authorization = crate::rymu::host_authorize(&mut stream, meta.rymu_host_epoch) => authorization?,
+        _ = unauthorized.evicted() => bail!("Connection authorization expired"),
+    };
 
     #[cfg(target_os = "macos")]
     {
@@ -254,6 +262,7 @@ pub async fn create_tcp_connection(
         Arc::downgrade(&server),
         meta,
         unauthorized,
+        lease,
     )
     .await;
     Ok(())
@@ -397,7 +406,7 @@ pub async fn create_relay_connection(
 
 async fn create_relay_connection_(
     server: ServerPtr,
-    relay_server: String,
+    _relay_server: String,
     uuid: String,
     peer_addr: SocketAddr,
     secure: bool,
@@ -405,7 +414,8 @@ async fn create_relay_connection_(
     meta: ConnectionMeta,
 ) -> ResultType<()> {
     // The proxy's address family does not constrain the relay target.
-    let relay_server = crate::check_port(relay_server, RELAY_PORT);
+    let route = crate::rymu::transport().context("Rymu relay transport is not configured")?;
+    let relay_server = crate::check_port(route.relay_server, RELAY_PORT);
     let use_ws_proxy = Config::is_proxy() && is_ws_endpoint(&check_ws(&relay_server));
     let mut stream = socket_client::connect_tcp(
         socket_client::ipv4_to_ipv6(relay_server, ipv4 || use_ws_proxy),

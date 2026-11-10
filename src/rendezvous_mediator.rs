@@ -46,6 +46,7 @@ fn connection_meta(
     ConnectionMeta {
         control_permissions,
         controlled_context,
+        rymu_host_epoch: None,
     }
 }
 
@@ -281,46 +282,25 @@ impl RendezvousMediator {
     }
 
     pub async fn start_all() {
-        crate::test_nat_type();
-        if config::is_outgoing_only() {
+        if cfg!(target_os = "android") || config::is_outgoing_only() {
             loop {
                 sleep(1.).await;
             }
         }
-        crate::hbbs_http::sync::start();
-        #[cfg(target_os = "windows")]
-        if crate::platform::is_installed() && crate::is_server() {
-            crate::updater::start_auto_update();
-        }
         check_zombie();
         let server = new_server();
-        if config::option2bool("stop-service", &Config::get_option("stop-service")) {
-            crate::test_rendezvous_server();
-        }
-        let server_cloned = server.clone();
-        tokio::spawn(async move {
-            direct_server(server_cloned).await;
-        });
-        #[cfg(target_os = "android")]
-        let start_lan_listening = true;
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let start_lan_listening = crate::platform::is_installed();
-        if start_lan_listening {
-            std::thread::spawn(move || {
-                allow_err!(super::lan::start_listening());
-            });
-        }
         scrap::codec::test_av1();
         *LAST_NOT_DEPLOYED_REGISTER.lock().await = None;
         loop {
             let timeout = Arc::new(RwLock::new(CONNECT_TIMEOUT));
             let conn_start_time = Instant::now();
             *SOLVING_PK_MISMATCH.lock().await = "".to_owned();
-            if !config::option2bool("stop-service", &Config::get_option("stop-service"))
-                && !crate::platform::installing_service()
-            {
+            if crate::rymu::managed_transport() && crate::rymu::hosting() {
+                MANUAL_RESTARTED.store(false, Ordering::SeqCst);
+                crate::rymu::listen_managed(server.clone()).await;
+            } else if let Some(route) = crate::rymu::transport().filter(|_| crate::rymu::hosting()) {
                 let mut futs = Vec::new();
-                let servers = Config::get_rendezvous_servers();
+                let servers = vec![check_port(&route.rendezvous_server, RENDEZVOUS_PORT)];
                 SHOULD_EXIT.store(false, Ordering::SeqCst);
                 MANUAL_RESTARTED.store(false, Ordering::SeqCst);
                 for host in servers.clone() {
@@ -1050,7 +1030,10 @@ impl RendezvousMediator {
         Ok(answer)
     }
 
-    async fn handle_punch_hole(&self, ph: PunchHole, server: ServerPtr) -> ResultType<()> {
+    async fn handle_punch_hole(&self, mut ph: PunchHole, server: ServerPtr) -> ResultType<()> {
+        // Apply the Rymu policy to incoming offers as well as outgoing calls.
+        // An empty offer preserves the existing TCP/relay fallback.
+        ph.webrtc_sdp_offer.clear();
         let mut peer_addr = AddrMangle::decode(&ph.socket_addr);
         let last = *LAST_MSG.lock().await;
         *LAST_MSG.lock().await = (peer_addr, Instant::now());
@@ -1330,6 +1313,9 @@ impl RendezvousMediator {
     }
 
     fn get_relay_server(&self, provided_by_rendezvous_server: String) -> String {
+        if let Some(route) = crate::rymu::transport() {
+            return check_port(route.relay_server, RENDEZVOUS_PORT + 1);
+        }
         let mut relay_server = Config::get_option("relay-server");
         if relay_server.is_empty() {
             relay_server = provided_by_rendezvous_server;
