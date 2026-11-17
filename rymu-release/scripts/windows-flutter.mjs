@@ -14,6 +14,10 @@ if (flags.some((flag) => flag !== (mode === "prepare" ? "--online" : "--local"))
 const accountApi = mode === "build" && process.env.RYMU_ACCOUNT_API_BASE
   ? new URL(process.env.RYMU_ACCOUNT_API_BASE)
   : null;
+const releaseVersion = mode === "build" ? process.env.RYMU_WINDOWS_VERSION : null;
+if (releaseVersion && !/^\d+\.\d+\.\d+$/u.test(releaseVersion)) {
+  throw new Error("RYMU_WINDOWS_VERSION must be a three-part numeric version.");
+}
 if (accountApi && (flags.includes("--local") || accountApi.protocol !== "https:" ||
     accountApi.href !== `${accountApi.origin}/api/v1`)) {
   throw new Error("RYMU_ACCOUNT_API_BASE must be an HTTPS /api/v1 URL used without --local.");
@@ -110,6 +114,7 @@ if (mode === "prepare") {
   await access(join(project, "../target/release/librustdesk.dll"));
   const args = [...jittedTool, join(tool, "bin/flutter_tools.dart"), "--no-version-check",
     "--verbose", "build", "windows", "--release", "--no-pub"];
+  if (releaseVersion) args.push(`--build-name=${releaseVersion}`, "--build-number=0");
   if (flags.includes("--local")) {
     args.push("--dart-define=RYMU_LOCAL_BUILD=true",
       "--dart-define=RYMU_LOCAL_API_BASE=http://127.0.0.1:18787/api/v1",

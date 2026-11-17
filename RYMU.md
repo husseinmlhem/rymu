@@ -1,30 +1,28 @@
 # Rymu
 
-Rymu is Hussein Mlhem's Windows and Android remote-access application, derived from [RustDesk](https://github.com/rustdesk/rustdesk) under AGPL-3.0. The upstream README and license notices are retained. This fork's qualification work is described here; it is not an upstream RustDesk release.
+Rymu is Hussein Mlhem's Windows and Android remote-access application, derived from [RustDesk](https://github.com/rustdesk/rustdesk) under AGPL-3.0. The upstream README, license and copyright notices are preserved. This is the Rymu fork, not an upstream RustDesk release.
 
-The imported application source is the already-published Windows 0.1.14 / Android 2077 source archive, SHA-256 `2a4fc09c72fd6760c99dedf9443d34800aabbbea58af46f7c4e56285d8d2cd3a`. Its upstream base is `23e5bb471a040d62f0a6ad52591fb30784265b73`, native tree `88a3f90f3e2bf4d7d684b7d43476f4b069307fb8`, and hbb_common submodule `fae47e024dd83cef6aaecde0aa7d11731df11649`. Git may normalize the archive's recorded CRLF text (including legacy text encodings) to LF; the verifier permits only that documented conversion.
+## Current public release
 
-The provenance candidate also records a reviewed `Runner.rc` metadata overlay: the company becomes Hussein Mlhem and the Rymu modification credit is appended while the complete upstream copyright notice remains. Original archive hashes are retained separately from the overlay's before/after and patch hashes. This candidate is changed source, not a claim that its future binaries correspond byte-for-byte to the older source archive. A distributed update requires its corresponding updated source.
+[Download Windows 0.1.16 and Android 2077](https://github.com/husseinmlhem/rymu/releases/tag/windows-v0.1.16-android2077). Windows 0.1.16 adds an enabled Cancel sign-in action while the browser or account service is pending, safe retry, and rejection of late canceled enrollment responses. Android 1.5.1 build 2077 is unchanged and release-signed. The Windows MSI is **unsigned**. These are public preview downloads: account creation currently requires an invitation and managed internet access is enabled for the platform owner only. Microsoft Store approval is not established by this release.
 
-A second, test-only overlay relocates the existing privacy test probe import to the same hash-verified QA helper under `rymu-release/scripts/qa/`. It preserves the tests and their existing execution conditions while making the native-root checkout self-contained. Literal Rust source dependencies are checked before tool bootstrap so they cannot accidentally resolve from a surrounding workspace.
+The release includes its corresponding source ZIP and SHA-256 checksums. The ZIP embeds Android 2077's exact original source archive, because the Android binary was not rebuilt. [Source record](rymu-release/releases/0.1.16/SOURCE-RECORD.json), [build provenance and limitations](rymu-release/releases/0.1.16/PROVENANCE.json), [Arabic Windows build notes](rymu-release/releases/0.1.16/WINDOWS_RELEASE_AR.md).
 
-- [Official application website](https://rymu.iptvora-server.workers.dev/)
-- [Released Windows installer](https://rymu.iptvora-server.workers.dev/api/v1/releases/latest/windows-installer)
-- [Released corresponding source](https://rymu.iptvora-server.workers.dev/api/v1/releases/latest/source)
-- [License](LICENCE) and [published source record](rymu-release/SOURCE-RECORD.json)
+The Windows MSI was built locally from the tested 0.1.16 Flutter/C++ source with the production HTTPS account API. Its frozen 0.1.14 Rust DLL was reused only after 393 Rust/TOML/lock inputs were verified unchanged. The 16 relevant Flutter tests, 110 MSI payload hashes, 12 installer Finish scenarios and 7 executable argument guards passed. This is not a new CI build, clean-machine installation, physical reboot, WACK certification or real-peer session claim.
 
-The manual [Windows CI workflow](.github/workflows/rymu-windows-ci.yml) is a new qualification recipe. It bootstraps hash-locked tools, builds Rust/Flutter, runs focused tests and packages an unsigned MSI. Its default 0.1.15 version is an **unpublished qualification candidate**, not a claim that a new release exists. Follow actual workflow results; static validation is not a completed build or remote-session test. Existing application access restrictions and authentication remain in force.
+## Source and builds
 
-No workflow signs or publishes a release. SignPath Foundation acceptance has not been granted, and no code-signing sponsorship or certificate is claimed. Publisher metadata, component provenance, upstream signing lineage and final runtime qualification remain review items before a signed release.
+This branch descends from the previously published CI commit 78628b3 and upstream commit 23e5bb471a040d62f0a6ad52591fb30784265b73; hbb_common remains the gitlink fae47e024dd83cef6aaecde0aa7d11731df11649. All 1,193 native files were compared with the release source archive. The only native-root layout difference is the documented privacy test helper import; original upstream workflows are preserved under rymu-release/upstream-workflows.
 
-## Proposed code-signing policy
+The original 0.1.14 archive hash mapping stays immutable in the baseline verifier. Reviewed source overlays pin the publisher attribution, test-helper relocation and 0.1.16 sign-in fix with before/after/patch hashes. New test and release support files are explicitly allowlisted.
 
-Hussein Mlhem maintains this Rymu fork. The SignPath Foundation eligibility application was submitted on 2026-11-10 and receipt was confirmed. Review of CI, licenses and component provenance is ongoing; no acceptance, certificate or sponsorship has been granted. Current website installers remain unsigned.
+The [manual Windows workflow](.github/workflows/rymu-windows-ci.yml) builds from this native-root checkout. It only runs on explicit workflow_dispatch; nothing signs or publishes automatically. Its artifact upload remains disabled by default. No workflow was dispatched for this publication. The workflow now includes the new cancellation tests, but that updated workflow has not itself been executed. For the original workspace-layout local build helpers, use the attached corresponding source ZIP and its instructions.
 
-If approved, signing will require a reviewed public source commit, a successful build through the approved CI process, verified output provenance and explicit human release approval by the maintainer. Signing will not run automatically for pull requests or arbitrary uploaded binaries. Maintainers and release approvers must use multifactor authentication. Third-party components and their existing attribution/signatures must be reviewed and preserved; Rymu does not claim to author upstream binaries. These controls must be configured and verified before the first signing request.
+Previous [engineering CI run 42812117630](https://github.com/husseinmlhem/rymu/actions/runs/42812117630) qualified the earlier 0.1.15 source; it must not be represented as a build of this new commit or of the attached local MSI. Third-party licensing and binary provenance limits remain documented. No signing certificate or sponsorship is claimed. No paid signing service is enabled.
 
-See the [application privacy policy](https://rymu.iptvora-server.workers.dev/privacy). Any future signing provider's separate terms and privacy policy require the account owner's review before enrollment.
+- [Official website](https://rymu.iptvora-server.workers.dev/)
+- [Downloads](https://rymu.iptvora-server.workers.dev/downloads)
+- [Privacy policy](https://rymu.iptvora-server.workers.dev/privacy)
+- [License](LICENCE)
 
-Only the Rymu workflow is active in the qualification branch. Original upstream workflows are preserved under `rymu-release/upstream-workflows/` for reference. Generated bridge files from the public archive are retained without unpinned code generation. The baseline verifier checks exact imported source bytes and reviewed CI files.
-
-Use a public repository with the standard `windows-2022` runner. Uploading artifacts is off by default and must be enabled only after checking the account's included artifact-storage allowance; enabled artifacts expire after one day. No paid runner, cache service or signing subscription is configured.
+Maintainer: Hussein Mlhem â€” [www.husseinmlhem.com](https://www.husseinmlhem.com), [h-m.agency](https://h-m.agency).

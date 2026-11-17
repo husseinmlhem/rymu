@@ -223,7 +223,7 @@ try {
                 Push-Location (Join-Path $native 'flutter')
                 $releaseBeforeTests = Get-RunnerPayloadHashes
                 try {
-                    Invoke-IsolatedFlutterTests -Tests @('test/rymu_windows_lifecycle_test.dart') -LoopbackFixtures
+                    Invoke-IsolatedFlutterTests -Tests @('test/rymu_windows_lifecycle_test.dart', 'test/rymu_windows_sign_in_cancel_test.dart') -LoopbackFixtures
                     Invoke-IsolatedFlutterTests -Tests @('test/rymu_account_callback_page_test.dart', 'test/rymu_file_locations_test.dart', 'test/rymu_receiving_folder_test.dart')
                 } finally {
                     Pop-Location

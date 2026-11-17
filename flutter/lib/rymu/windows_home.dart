@@ -46,6 +46,7 @@ class _RymuWindowsHomeState extends State<RymuWindowsHome> with WindowListener {
   Completer<void>? _backgroundOperation;
   bool _busy = false, _hosting = false, _viewOnly = false, _ar = false;
   bool _hostRequested = false, _waitingForBrowser = false;
+  bool _signInRetry = false;
   bool _closing = false;
   bool _startupBusy = false, _startupError = false;
   PackagedStartupState? _startupState;
@@ -243,7 +244,8 @@ class _RymuWindowsHomeState extends State<RymuWindowsHome> with WindowListener {
     } catch (error) {
       if (_active) {
         final code = _operationError(error);
-        _error = code == 'refresh_interrupted' ||
+        _error = code == 'sign_in_cancelled' ||
+                code == 'refresh_interrupted' ||
                 (background && _account!.signedIn && _wantsHosting)
             ? null
             : code;
@@ -394,6 +396,7 @@ class _RymuWindowsHomeState extends State<RymuWindowsHome> with WindowListener {
     );
     if (selection == null || !_active) return;
     await _run(() async {
+      _signInRetry = false;
       final startHosting = await _account!.beginSignIn(
         alias: selection.$1,
         host: selection.$2,
@@ -407,6 +410,16 @@ class _RymuWindowsHomeState extends State<RymuWindowsHome> with WindowListener {
         },
       );
       await _finishEnrollment(startHosting);
+    });
+  }
+
+  void _cancelSignIn() {
+    _account?.cancelEnrollment();
+    setState(() {
+      _browserCode = null;
+      _waitingForBrowser = false;
+      _signInRetry = true;
+      _error = null;
     });
   }
 
@@ -757,24 +770,32 @@ class _RymuWindowsHomeState extends State<RymuWindowsHome> with WindowListener {
                                 : () => _run(() async =>
                                     _finishEnrollment(await a.finishSignIn())),
                             child: Text(t('Finish setup', 'إكمال الإعداد'))),
-                        TextButton(
-                            onPressed: _busy
-                                ? null
-                                : () => setState(a.cancelEnrollment),
-                            child: Text(t('Cancel', 'إلغاء'))),
                       ]),
+                ] else if (a?.signingIn == true) ...[
+                  Text(t('Connecting to Rymu…', 'جارٍ الاتصال بريمو…')),
                 ] else ...[
-                  Text(a?.needsSignIn == true
-                      ? _message('refresh_interrupted')
-                      : t('Use the same account on your devices.',
-                          'استخدم الحساب نفسه على أجهزتك.')),
+                  Text(_signInRetry
+                      ? t('Sign-in canceled. You can try again.',
+                          'تم إلغاء تسجيل الدخول. يمكنك المحاولة مجدداً.')
+                      : a?.needsSignIn == true
+                          ? _message('refresh_interrupted')
+                          : t('Use the same account on your devices.',
+                              'استخدم الحساب نفسه على أجهزتك.')),
                   const SizedBox(height: 18),
                   FilledButton.icon(
                       onPressed: a == null || _busy
                           ? null
                           : () => _beginSignIn(context),
                       icon: const Icon(Icons.login_rounded, size: 18),
-                      label: Text(t('Sign in', 'تسجيل الدخول'))),
+                      label: Text(_signInRetry || _error != null
+                          ? t('Try again', 'حاول مجدداً')
+                          : t('Sign in', 'تسجيل الدخول'))),
+                ],
+                if (a?.signingIn == true || pending != null) ...[
+                  const SizedBox(height: 12),
+                  TextButton(
+                      onPressed: _cancelSignIn,
+                      child: Text(t('Cancel sign-in', 'إلغاء تسجيل الدخول'))),
                 ],
               ]),
             ),

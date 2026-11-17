@@ -1,0 +1,55 @@
+{
+  "release": "windows-v0.1.16-android2077",
+  "sourceArchiveSha256": "f0edaf47ebc80e60b8048454a55a04db28e20a3cded882c7d6ad9b24ce192f65",
+  "nativeSourceTree": "533d3ec913f038669ecb8fbfc565b81b5abde62f",
+  "upstreamCommit": "23e5bb471a040d62f0a6ad52591fb30784265b73",
+  "hbbCommonCommit": "fae47e024dd83cef6aaecde0aa7d11731df11649",
+  "sourceNativeFilesCompared": 1193,
+  "nativeCheckoutDifference": "src/rymu/privacy_tests.rs relocates the same verified test helper to the native-root checkout; no runtime Rust change. Original source is in the attached ZIP.",
+  "upstreamWorkflowRelocation": "Original workflows retained byte-for-byte under rymu-release/upstream-workflows; only manual Rymu workflow is active.",
+  "assets": [
+    {
+      "file": "Rymu-Windows-x64-0.1.16.msi",
+      "bytes": 36816440,
+      "sha256": "785408bca004eb8f8301beb750a550a1a582c87b0be694af8384be63e6ed5b66"
+    },
+    {
+      "file": "Rymu-Android-arm64-1.5.1-2077.apk",
+      "bytes": 71037692,
+      "sha256": "5d112a9d2fdc53625d42abf389a5349857f5b669a0a613011d391ec70b340497"
+    },
+    {
+      "file": "Rymu-Native-Public-0.1.16-2077-Source.zip",
+      "bytes": 18755264,
+      "sha256": "f0edaf47ebc80e60b8048454a55a04db28e20a3cded882c7d6ad9b24ce192f65"
+    }
+  ],
+  "windowsBuild": "Fresh local Flutter AOT/C++ 0.1.16+0, production HTTPS account service; frozen 0.1.14 DLL reused after 393 Rust/TOML/lock input parity check. Not a downloaded CI artifact.",
+  "frozenNativeDllSha256": "d925ffa5a74e786b1d9630c9066dbb1046258d8eb378bff770cd831264e0fa2d",
+  "validation": {
+    "cancellationCases": 3,
+    "existingLifecycleCases": 13,
+    "skipped": 0,
+    "finalRaceGuardCasesRetested": 3,
+    "analyzer": "No issues found",
+    "msiPayloadHashesMatched": 110,
+    "installerFinishScenarios": 12,
+    "exeArgumentGuards": 7,
+    "newCiRunTriggered": false
+  },
+  "android": "Unchanged release-signed ARM64 APK 2077. The corresponding ZIP embeds its exact original 0.1.14-2077 source archive.",
+  "windowsSignature": "NotSigned",
+  "store": "Approval not established; no Store MSIX distributed in this release.",
+  "limits": [
+    "No new real-peer session or physical reboot claim.",
+    "No WACK/clean-machine install qualification claim.",
+    "Current account invitations and owner-only managed WAN restrictions remain.",
+    "Third-party component license/provenance review remains incomplete."
+  ],
+  "sourceScan": {
+    "archiveEntriesIncludingNestedArchive": 2502,
+    "highConfidenceSecretOrPrivateFileFindings": 0,
+    "scope": "Private-key blocks, GitHub/AWS/Stripe credential formats and sensitive filename denylist; not a guarantee against every possible secret."
+  },
+  "androidCertificateSha256": "183c4a28f21b457d3790c79c2c2cb8d82a74fd298acd1a8a832c68910094bbe2"
+}

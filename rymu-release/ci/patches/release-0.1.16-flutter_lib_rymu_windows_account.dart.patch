@@ -1,0 +1,383 @@
+--- a/flutter/lib/rymu/windows_account.dart
++++ b/flutter/lib/rymu/windows_account.dart
+@@ -13,7 +13,6 @@
+ import 'windows_logon_start.dart';
+ import 'windows_package_identity.dart';
+ 
+-const _loopback = 'http://127.0.0.1:49383/callback';
+ const _localBuild = bool.fromEnvironment('RYMU_LOCAL_BUILD');
+ const _hostedApi = String.fromEnvironment('RYMU_ACCOUNT_API_BASE');
+ const _localApi = String.fromEnvironment('RYMU_LOCAL_API_BASE',
+@@ -45,12 +44,18 @@
+   Map<String, dynamic>? _pending;
+   AccountTransport? _managedTransport;
+   HttpServer? _callback;
++  final int _browserReturnPort;
++  int _signInEpoch = 0;
++  HttpClient? _signInHttp;
++  Completer<void>? _signInCancellation;
++  Completer<String?>? _browserResponse;
+   Future<String>? _refresh;
+   final HttpClient _http = HttpClient()
+     ..connectionTimeout = const Duration(seconds: 5)
+     ..findProxy = (_) => 'DIRECT';
+ 
+-  WindowsAccount() {
++  WindowsAccount({int browserReturnPort = 49383})
++      : _browserReturnPort = browserReturnPort {
+     _vault = RymuNative.readWindowsVault() ?? {};
+     final savedApi = _settings['api'];
+     if (!_localBuild &&
+@@ -72,6 +77,7 @@
+   bool get needsSignIn => _refresh == null && _session[_refreshPending] == true;
+   bool get signedIn => !needsSignIn && _session['refreshToken'] is String;
+   bool get pending => _pending != null;
++  bool get signingIn => _signInHttp != null;
+   String get deviceId => (_session['device'] as Map?)?['id'] as String? ?? '';
+   bool get isHost =>
+       ((_session['device'] as Map?)?['roles'] as List? ?? []).contains('host');
+@@ -125,7 +131,7 @@
+     required bool ar,
+   }) {
+     if (api.isNotEmpty) _checkedApi(api);
+-    if (api != apiBase && (signedIn || pending)) {
++    if (api != apiBase && (signedIn || pending || signingIn)) {
+       throw const ControlError('sign_out_before_changing_service');
+     }
+     final previous = _manualTransport;
+@@ -257,12 +263,14 @@
+   Future<Map<String, dynamic>> _send(String method, String route,
+       {String? bearer,
+       Map<String, Object?>? body,
+-      void Function()? beforeSend}) async {
++      void Function()? beforeSend,
++      HttpClient? client}) async {
+     final base = _checkedApi(apiBase);
+     final uri = base.replace(path: '${base.path}$route');
+     try {
+-      final request =
+-          await _http.openUrl(method, uri).timeout(const Duration(seconds: 6));
++      final request = await (client ?? _http)
++          .openUrl(method, uri)
++          .timeout(const Duration(seconds: 6));
+       request.followRedirects = false;
+       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+       if (bearer != null) {
+@@ -307,51 +315,104 @@
+     }
+   }
+ 
++  void _checkSignIn(int epoch) {
++    if (epoch != _signInEpoch || _signInCancellation == null) {
++      throw const ControlError('sign_in_cancelled');
++    }
++  }
++
++  Future<T> _signInStep<T>(int epoch, Future<T> Function() action) async {
++    _checkSignIn(epoch);
++    final cancelled = _signInCancellation!;
++    try {
++      final result = await Future.any<T>([
++        action(),
++        cancelled.future
++            .then<T>((_) => throw const ControlError('sign_in_cancelled')),
++      ]);
++      _checkSignIn(epoch);
++      return result;
++    } catch (_) {
++      _checkSignIn(epoch);
++      rethrow;
++    }
++  }
++
++  Future<Map<String, dynamic>> _signInSend(int epoch, String route,
++          {String? bearer, Map<String, Object?>? body}) =>
++      _signInStep(
++          epoch,
++          () => _send('POST', route,
++              bearer: bearer, body: body, client: _signInHttp));
++
+   Future<bool> beginSignIn({
+     required String alias,
+     required bool host,
+     required void Function(String? code) showBrowser,
+   }) async {
+     final base = _checkedApi(apiBase);
++    cancelEnrollment();
++    final epoch = _signInEpoch;
++    _signInCancellation = Completer<void>();
++    _signInHttp = HttpClient()
++      ..connectionTimeout = const Duration(seconds: 5)
++      ..findProxy = (_) => 'DIRECT';
+     final verifier = _random();
+     final state = _random();
+-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 49383);
+-    _callback = server;
+-    final response = Completer<String>();
+-    unawaited(server.forEach((request) async {
+-      final q = request.uri.queryParametersAll;
+-      final code = q['code'];
+-      final valid = request.method == 'GET' &&
+-          request.uri.path == '/callback' &&
+-          request.headers.value('host') == '127.0.0.1:49383' &&
+-          q['state']?.length == 1 &&
+-          q['state']?.single == state &&
+-          code?.length == 1 &&
+-          RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(code!.single) &&
+-          !response.isCompleted;
+-      final page = AccountCallbackPage(
+-          valid: valid,
+-          arabic: localeSet
+-              ? arabic
+-              : Platform.localeName.toLowerCase().startsWith('ar'));
+-      request.response
+-        ..statusCode = valid ? 200 : 400
+-        ..headers.contentType = ContentType.html
+-        ..headers.set(HttpHeaders.cacheControlHeader, 'no-store')
+-        ..headers.set('Content-Security-Policy', page.contentSecurityPolicy)
+-        ..headers.set('Referrer-Policy', 'no-referrer')
+-        ..headers.set('X-Content-Type-Options', 'nosniff')
+-        ..headers.set('X-Frame-Options', 'DENY')
+-        ..write(page.html);
+-      await request.response.close();
+-      if (valid && !response.isCompleted) response.complete(code.single);
+-    }));
+-    try {
++    final response = Completer<String?>();
++    _browserResponse = response;
++    HttpServer? server;
++    try {
++      final listener = await HttpServer.bind(
++          InternetAddress.loopbackIPv4, _browserReturnPort);
++      server = listener;
++      _checkSignIn(epoch);
++      _callback = listener;
++      final callback = Uri(
++          scheme: 'http',
++          host: '127.0.0.1',
++          port: listener.port,
++          path: '/callback');
++      unawaited(listener.forEach((request) async {
++        final q = request.uri.queryParametersAll;
++        final code = q['code'];
++        final valid = epoch == _signInEpoch &&
++            request.method == 'GET' &&
++            request.uri.path == '/callback' &&
++            request.headers.value('host') == callback.authority &&
++            q['state']?.length == 1 &&
++            q['state']?.single == state &&
++            code?.length == 1 &&
++            RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(code!.single) &&
++            !response.isCompleted;
++        final page = AccountCallbackPage(
++            valid: valid,
++            arabic: localeSet
++                ? arabic
++                : Platform.localeName.toLowerCase().startsWith('ar'));
++        try {
++          request.response
++            ..statusCode = valid ? 200 : 400
++            ..headers.contentType = ContentType.html
++            ..headers.set(HttpHeaders.cacheControlHeader, 'no-store')
++            ..headers.set('Content-Security-Policy', page.contentSecurityPolicy)
++            ..headers.set('Referrer-Policy', 'no-referrer')
++            ..headers.set('X-Content-Type-Options', 'nosniff')
++            ..headers.set('X-Frame-Options', 'DENY')
++            ..write(page.html);
++          await request.response.close();
++        } on IOException {
++          return;
++        }
++        if (valid && epoch == _signInEpoch && !response.isCompleted) {
++          response.complete(code.single);
++        }
++      }));
+       final authorization =
+-          await _send('POST', '/native/authorize/start', body: {
++          await _signInSend(epoch, '/native/authorize/start', body: {
+         'codeChallenge': _b64(sha256.convert(utf8.encode(verifier)).bytes),
+         'state': state,
+-        'redirectUri': _loopback,
++        'redirectUri': callback.toString(),
+         'flow': 'account',
+       });
+       final url = _browserUri(base, authorization['authorizationUrl']);
+@@ -359,16 +420,20 @@
+       if (!accountFlow && authorization['verificationCode'] is! String) {
+         throw const ControlError('unexpected_response');
+       }
++      _checkSignIn(epoch);
+       showBrowser(
+           accountFlow ? null : authorization['verificationCode'] as String);
+-      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
++      if (!await _signInStep(
++          epoch, () => launchUrl(url, mode: LaunchMode.externalApplication))) {
+         throw const ControlError('browser_unavailable');
+       }
+-      final code = await response.future.timeout(const Duration(minutes: 4));
+-      final token = await _send('POST', '/native/token', body: {
++      final code = await _signInStep(
++          epoch, () => response.future.timeout(const Duration(minutes: 4)));
++      if (code == null) throw const ControlError('sign_in_cancelled');
++      final token = await _signInSend(epoch, '/native/token', body: {
+         'code': code,
+         'codeVerifier': verifier,
+-        'redirectUri': _loopback,
++        'redirectUri': callback.toString(),
+       });
+       if (accountFlow != (token['flow'] == 'account')) {
+         throw const ControlError('unexpected_response');
+@@ -376,21 +441,23 @@
+       final bearer =
+           (token['enrollmentToken'] ?? token['accessToken']) as String;
+       final seed = _random();
+-      final challenge =
+-          await _send('POST', '/native/enroll/start', bearer: bearer, body: {
+-        'alias': alias,
+-        'platform': 'windows',
+-        'roles': host ? ['host', 'controller'] : ['controller'],
+-        'devicePublicKey': RymuNative.devicePublicKey(seed),
+-        if (host) ...RymuNative.identity(),
+-        if (host) 'hostConfirmed': true,
+-      });
++      final challenge = await _signInSend(epoch, '/native/enroll/start',
++          bearer: bearer,
++          body: {
++            'alias': alias,
++            'platform': 'windows',
++            'roles': host ? ['host', 'controller'] : ['controller'],
++            'devicePublicKey': RymuNative.devicePublicKey(seed),
++            if (host) ...RymuNative.identity(),
++            if (host) 'hostConfirmed': true,
++          });
+       if (accountFlow != (challenge['flow'] == 'account')) {
+         throw const ControlError('unexpected_response');
+       }
+       if (!accountFlow) {
+-        await _verifyEnrollment(bearer, challenge, seed);
+-      }
++        await _verifyEnrollment(epoch, bearer, challenge, seed);
++      }
++      _checkSignIn(epoch);
+       _pending = {
+         'bearer': bearer,
+         'challenge': challenge,
+@@ -400,14 +467,16 @@
+       if (accountFlow) return await finishSignIn();
+       return false;
+     } finally {
+-      _callback = null;
+-      await server.close(force: true);
+-    }
+-  }
+-
+-  Future<Map<String, dynamic>> _verifyEnrollment(
+-          String bearer, Map<String, dynamic> challenge, String seed) =>
+-      _send('POST', '/native/enroll/verify', bearer: bearer, body: {
++      if (identical(_browserResponse, response)) _browserResponse = null;
++      if (identical(_callback, server)) _callback = null;
++      await server?.close(force: true);
++      if (epoch == _signInEpoch && _pending == null) cancelEnrollment();
++    }
++  }
++
++  Future<Map<String, dynamic>> _verifyEnrollment(int epoch, String bearer,
++          Map<String, dynamic> challenge, String seed) =>
++      _signInSend(epoch, '/native/enroll/verify', bearer: bearer, body: {
+         'deviceId': challenge['deviceId'],
+         'signature':
+             RymuNative.signEnrollment(seed, challenge['proof'] as String),
+@@ -429,9 +498,12 @@
+     if (challenge == null || pendingAccountSignIn) {
+       throw const ControlError('enrollment_not_started');
+     }
+-    if (!await launchUrl(
+-        _browserUri(_checkedApi(apiBase), challenge['approvalUrl']),
+-        mode: LaunchMode.externalApplication)) {
++    final epoch = _signInEpoch;
++    if (!await _signInStep(
++        epoch,
++        () => launchUrl(
++            _browserUri(_checkedApi(apiBase), challenge['approvalUrl']),
++            mode: LaunchMode.externalApplication))) {
+       throw const ControlError('browser_unavailable');
+     }
+   }
+@@ -439,23 +511,27 @@
+   Future<bool> finishSignIn() async {
+     final pending = _pending;
+     if (pending == null) throw const ControlError('enrollment_not_started');
+-    final challenge = pendingChallenge!;
++    final epoch = _signInEpoch;
++    _checkSignIn(epoch);
++    final challenge = pending['challenge'] as Map<String, dynamic>;
+     final bearer = pending['bearer'] as String;
+     if (pendingAccountSignIn && pending['verified'] != true) {
+       try {
+         final result = await _verifyEnrollment(
+-            bearer, challenge, pending['seed'] as String);
++            epoch, bearer, challenge, pending['seed'] as String);
+         if (result['approved'] != true) {
+           throw const ControlError('unexpected_response');
+         }
++        _checkSignIn(epoch);
+         pending['verified'] = true;
+       } on ControlError catch (error) {
+         if (error.code != 'invalid_device_proof') rethrow;
+         // Finish can recover a verification response lost after proof consumption.
+       }
+     }
+-    final value = await _send('POST', '/native/enroll/finish',
++    final value = await _signInSend(epoch, '/native/enroll/finish',
+         bearer: bearer, body: {'deviceId': challenge['deviceId']});
++    _checkSignIn(epoch);
+     final settings = {..._settings, 'api': apiBase};
+     final wasAutomatic = settings.remove(_autoHostDevice) != null;
+     _save({
+@@ -464,12 +540,26 @@
+       'session': value,
+       'seed': pending['seed'],
+     });
+-    _pending = null;
++    cancelEnrollment();
+     if (wasAutomatic) _setWindowsStartup(false);
+     return pending['host'] == true && isHost;
+   }
+ 
+-  void cancelEnrollment() => _pending = null;
++  void cancelEnrollment() {
++    _signInEpoch++;
++    _pending = null;
++    final cancelled = _signInCancellation;
++    _signInCancellation = null;
++    if (cancelled != null && !cancelled.isCompleted) cancelled.complete();
++    final response = _browserResponse;
++    _browserResponse = null;
++    if (response != null && !response.isCompleted) response.complete(null);
++    _signInHttp?.close(force: true);
++    _signInHttp = null;
++    final callback = _callback;
++    _callback = null;
++    unawaited(callback?.close(force: true));
++  }
+ 
+   Future<String> accessToken() async {
+     final inFlight = _refresh;
+@@ -616,7 +706,7 @@
+     final settings = {..._settings, _autoHostPreference: false};
+     final wasAutomatic = settings.remove(_autoHostDevice) != null;
+     RymuNative.clearWindowsVault();
+-    _pending = null;
++    cancelEnrollment();
+     _vault = {'settings': settings};
+     try {
+       _save(_vault);
+@@ -630,7 +720,7 @@
+     try {
+       RymuNative.disableHost();
+     } finally {
+-      unawaited(_callback?.close(force: true));
++      cancelEnrollment();
+       _http.close(force: true);
+     }
+   }

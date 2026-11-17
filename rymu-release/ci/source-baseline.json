@@ -1254,18 +1254,28 @@
     "rymu-release/scripts/windows-store/test_identity.py": "14cc8da65c7c2e197cea01190971a96423098215b82b44ce37e44a520877d223"
   },
   "ciInputs": {
-    "RYMU.md": "062c378f31a28c3d83e05925ac1d538193a0a492fce4cb051e4732e6862c5f36",
+    "RYMU.md": "09ef008346e90a09942cc548060fae3d5fbc97329418e442b521e3b9d2a918f3",
     "rymu-release/ci/collect_vcpkg_notices.py": "cfb87dd30946c33f48cdd9983a02f81b0f0525809f5a17d3aa396ef0505d9cf2",
     "rymu-release/ci/emit_evidence.py": "3a266830bf702b50e029eb394c4d2f0a6e4b0c8d780c44ea61c6e7481aca4e04",
     "rymu-release/ci/patches/privacy-test-layout.patch": "68e1554fd8dbd28a90b33f38cd3436a6260f1dd993ae86ebf95006f9e392b07a",
     "rymu-release/ci/patches/runner-publisher-attribution.patch": "90dbc31042502be5eb9da6a90f7ae88af62c43b5f4cf2b42944e273b6fe02464",
     "rymu-release/.gitattributes": "e135f27898f79ee5cb6f3ff82afbe27e09dae0af8d82a3a8eedae645358457da",
-    ".github/workflows/rymu-windows-ci.yml": "8dc0ed3f1d149576c14b39ad8a451694e6ecbdd2390271493e1c9cccbf857793",
+    ".github/workflows/rymu-windows-ci.yml": "86a88460f52be266a5cf745a4e3938e499731c6255a04c890147a085fb8c26d9",
     "rymu-release/ci/test_collect_vcpkg_notices.py": "fea4103ae8065d127c1d9fba02dd3311decc34f6fe13fa48b19528feb2a86b04",
     "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
-    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92"
+    "rymu-release/ci/windows-build.ps1": "82734fd239a7b09d946572c83390fc6cf7ae02e4fc7bc17fd18bc322732d9133",
+    "rymu-release/ci/patches/release-0.1.16-flutter_lib_rymu_windows_account.dart.patch": "00ed2ac3d48318437157dff7763a0c75e4c6d6fa81b05f7cae7d65a1548f55a5",
+    "rymu-release/ci/patches/release-0.1.16-flutter_lib_rymu_windows_home.dart.patch": "89f1933395fece1b88b019fe28a9b31c82c9160dec4b35f8217195e5bfd5937e",
+    "flutter/test/rymu_windows_sign_in_cancel_test.dart": "b8e9e9ab18ced1d7b77a094e2753a6565de41e8f837cc4b09aa55dae0ba24236",
+    "rymu-release/ci/patches/release-0.1.16-rymu-release_scripts_windows-flutter.mjs.patch": "460943b5aa1805e3dbbdf9087826932398bb424e3409cf40dbc57700ac2f721c",
+    "rymu-release/releases/0.1.16/SOURCE-RECORD.json": "e7a82679322943285e11139a7c9ef1b49c24d2f0f42d8da38044f5639bb5cadd",
+    "rymu-release/releases/0.1.16/WINDOWS_RELEASE_AR.md": "f87eeb242428b7c434cb8d4d46719cb4eb1ff000ef36799cb44e4c7c0c564c79",
+    "rymu-release/releases/0.1.16/PUBLIC_SOURCE.md": "6b2bf6549f8e864b98d1e82be7b25e4f8954840b63d32b5b80025fe991f57d2a",
+    "rymu-release/releases/0.1.16/PROVENANCE.json": "1e9fcc225b1a1429a32974ce26d320c7520763844ef0f1b14920b45c45e69b31",
+    "rymu-release/releases/0.1.16/RELEASE_NOTES.md": "3ae339298b71d12505c0eed24d840343ae444b508259c00fabc210f56ac506fc",
+    "rymu-release/releases/0.1.16/SHA256SUMS.txt": "8859721919d09e079a57732bafeac62919252312b78117624c534785b59ef36e"
   },
   "lineEndingNormalizedSha256": {
     "rymu-release/SOURCE-RECORD.json": "1ecdc8b146bda7edc1bcc169b1ce113e4d0faf24a2c1de488891b664e1f1141a",
@@ -2447,13 +2457,14 @@
     "rymu-release/ci/test_verify_candidate.py": "6227e4a0c08ef038b8d5b9f7de7377b9ee9a455178c5a51fbef763987d90587f",
     "rymu-release/ci/toolchain-lock.json": "d73df542384e55f4433c969b1fa2563c924a9f56a51a083c018a49586d7beaf8",
     "rymu-release/ci/verify_candidate.py": "51053e0e5a062a42e298c6bc0da19d699a031b0492c4d3f577168a41bdd96310",
-    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92"
+    "rymu-release/ci/windows-build.ps1": "9a6f06cacb4d8fcb724b9b5271ec20884ce975645a8f20323957c9d55557de92",
+    "flutter/test/rymu_windows_sign_in_cancel_test.dart": "6ee8a8a9156c758ac5235bfcc08735775dcafb0e20e506548bc7652ea7c5ca66"
   },
   "notes": [
     "Original source archive hashes are preserved; explicit reviewedSourceChanges records all source overlays.",
     "Upstream active workflows are preserved outside .github/workflows.",
     "Git checkout may normalize recorded NUL-free CRLF text (including legacy encodings) to LF; only that exact conversion is accepted.",
-    "New CI is not a public repository or a completed build."
+    "Public release0.1.16 source is an explicit reviewed overlay; actual local-build provenance is recorded under releases/0.1.16. Updated workflow has not been run."
   ],
   "reviewedSourceChanges": {
     "flutter/windows/runner/Runner.rc": {
@@ -2475,6 +2486,36 @@
       "patchSha256": "68e1554fd8dbd28a90b33f38cd3436a6260f1dd993ae86ebf95006f9e392b07a",
       "baseCommit": "ad40dce6fe362e40f6972f107afff59d12556585",
       "reason": "Existing Windows privacy test probe relocated to the hash-identical QA helper in the native-root layout; no tests removed or skipped."
+    },
+    "flutter/lib/rymu/windows_account.dart": {
+      "beforeSha256": "47300436f87d88ea490a866e10c4c3f9f1c6f6eb6908522b9742e8da90474d1f",
+      "beforeLineEndingNormalizedSha256": "eb22cd4cef3bf50fc0f7415e89cbed80f17d683c9e0dece213c942d85605e580",
+      "afterSha256": "afbe43694a2080570984bfd77ff8562de31387a818cdcd1252e7311f5f0fa8b6",
+      "afterLineEndingNormalizedSha256": "72a720f4400f87cb7316d4a2fd43b7a1cd0f2882c9d18e4f0251d532e93f40a0",
+      "patch": "rymu-release/ci/patches/release-0.1.16-flutter_lib_rymu_windows_account.dart.patch",
+      "patchSha256": "00ed2ac3d48318437157dff7763a0c75e4c6d6fa81b05f7cae7d65a1548f55a5",
+      "baseCommit": "78628b34fad96e97e6731f9d5d7c986f51fc5b18",
+      "reason": "Release0.1.16 Windows sign-in cancellation; exact source from the verified corresponding archive."
+    },
+    "flutter/lib/rymu/windows_home.dart": {
+      "beforeSha256": "11cdf88fc3b15b701e8d7fc718239db218fa7e7df5604b6b94976fa1b79bd808",
+      "beforeLineEndingNormalizedSha256": "ff16aea320e677b56b3a27c9c465c090732f104ca27902b82a44aff9faf76c41",
+      "afterSha256": "4a88fc8a6510ec41157c38b2c9873e54ea276d891f0c64d17ecef05018767488",
+      "afterLineEndingNormalizedSha256": "9f04e0fe127f2244611512152295e157e6a87db385c896f74738702c40035eeb",
+      "patch": "rymu-release/ci/patches/release-0.1.16-flutter_lib_rymu_windows_home.dart.patch",
+      "patchSha256": "89f1933395fece1b88b019fe28a9b31c82c9160dec4b35f8217195e5bfd5937e",
+      "baseCommit": "78628b34fad96e97e6731f9d5d7c986f51fc5b18",
+      "reason": "Release0.1.16 Windows sign-in cancellation; exact source from the verified corresponding archive."
+    },
+    "rymu-release/scripts/windows-flutter.mjs": {
+      "beforeSha256": "47b809534bdd64825d11c7b342337fbde2655d5a0ea9d04b0b9c3027e9d03fae",
+      "beforeLineEndingNormalizedSha256": "47b809534bdd64825d11c7b342337fbde2655d5a0ea9d04b0b9c3027e9d03fae",
+      "afterSha256": "d0f041e1e0fbfe8c2cdbe6cadacbe6799d7af66624df03492a8506acaa202172",
+      "afterLineEndingNormalizedSha256": "d0f041e1e0fbfe8c2cdbe6cadacbe6799d7af66624df03492a8506acaa202172",
+      "patch": "rymu-release/ci/patches/release-0.1.16-rymu-release_scripts_windows-flutter.mjs.patch",
+      "patchSha256": "460943b5aa1805e3dbbdf9087826932398bb424e3409cf40dbc57700ac2f721c",
+      "baseCommit": "78628b34fad96e97e6731f9d5d7c986f51fc5b18",
+      "reason": "Exact public source helper adds validated Windows version selection for local workspace builds."
     }
   }
 }

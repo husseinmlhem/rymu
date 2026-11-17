@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Unpublished three-part MSI qualification version
+        description: Three-part MSI qualification version (does not publish)
         required: true
-        default: '0.1.15'
+        default: '0.1.16'
         type: string
       upload_artifacts:
         description: Enable only after confirming free artifact storage allowance
